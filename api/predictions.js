@@ -1,5 +1,5 @@
 const API = 'https://api.football-data.org/v4';
-const cache = { data: null, ts: 0 };
+const cache = { data: null, ts: 0, key: '' };
 const HIST = {};
 
 function cors(res) {
@@ -52,12 +52,20 @@ export default async function handler(req, res) {
   if (!token) return res.status(500).json({ ok: false, error: 'Falta FOOTBALL_DATA_TOKEN' });
   try {
     const now = Date.now();
-    if (!cache.data || now - cache.ts > 10 * 60 * 1000) {
-      const today = new Date().toISOString().split('T')[0];
-      const fx = await fd('/matches?dateFrom=' + today + '&dateTo=' + today, token);
+    // Fecha opcional: /api/predictions?date=YYYY-MM-DD
+    const qDate = req.query.date || null;
+    const base = qDate ? new Date(qDate + 'T12:00:00Z') : new Date();
+    const from = new Date(base.getTime() - 1 * 86400000).toISOString().split('T')[0];
+    const to = new Date(base.getTime() + 6 * 86400000).toISOString().split('T')[0];
+    const cacheKey = from + '_' + to;
+
+    if (!cache.data || cache.key !== cacheKey || now - cache.ts > 10 * 60 * 1000) {
+      const fx = await fd('/matches?dateFrom=' + from + '&dateTo=' + to, token);
       cache.data = fx.matches || [];
       cache.ts = now;
+      cache.key = cacheKey;
     }
+
     const comps = {};
     for (const m of cache.data) comps[m.competition.id] = true;
     for (const cid of Object.keys(comps)) {
@@ -68,6 +76,7 @@ export default async function handler(req, res) {
         } catch (e) { HIST[cid] = { ratings: {}, ts: now }; }
       }
     }
+
     const out = [];
     for (const m of cache.data) {
       const R = (HIST[m.competition.id] && HIST[m.competition.id].ratings) || {};
@@ -79,13 +88,19 @@ export default async function handler(req, res) {
       const main = probs.home >= probs.draw && probs.home >= probs.away ? 'home'
         : probs.away >= probs.home && probs.away >= probs.draw ? 'away' : 'draw';
       out.push({
-        id: m.id, home: m.homeTeam.name, away: m.awayTeam.name,
-        league: m.competition.name, time: m.utcDate,
+        id: m.id,
+        home: m.homeTeam.name,
+        away: m.awayTeam.name,
+        league: m.competition.name,
+        time: m.utcDate,
+        status: m.status,
+        score: m.score && m.score.fullTime ? { home: m.score.fullTime.home, away: m.score.fullTime.away } : null,
         probs, main, hL: +hL.toFixed(2), aL: +aL.toFixed(2)
       });
     }
-    res.status(200).json({ ok: true, count: out.length, predictions: out, generated: new Date().toISOString() });
+    out.sort((a, b) => (a.time || '').localeCompare(b.time || ''));
+    res.status(200).json({ ok: true, count: out.length, window: { from, to }, predictions: out, generated: new Date().toISOString() });
   } catch (e) {
     res.status(500).json({ ok: false, error: String(e.message || e) });
   }
-}
+  }
