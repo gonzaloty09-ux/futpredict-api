@@ -1,5 +1,5 @@
 const API = 'https://api.football-data.org/v4';
-const CODES = ['CL', 'EL', 'PL', 'PD', 'SA', 'BL', 'FL1', 'DED', 'PPL', 'BSA'];
+const CODES = ['CL', 'EL', 'PL', 'PD', 'SA', 'BL', 'FL1', 'DED'];
 const cache = { data: null, ts: 0, key: '' };
 const HIST = {};
 
@@ -57,14 +57,20 @@ function buildForm(matches) {
   for (const k in F) out[k] = F[k].slice(-5).reverse();
   return out;
 }
-async function fd(path, token) {
-  const r = await fetch(API + path, { headers: { 'X-Auth-Token': token } });
-  if (!r.ok) throw new Error('football-data error ' + r.status + ' en ' + path);
-  return r.json();
+async function fd(path, token, ms) {
+  ms = ms || 8000;
+  const c = new AbortController();
+  const t = setTimeout(function () { c.abort(); }, ms);
+  try {
+    const r = await fetch(API + path, { headers: { 'X-Auth-Token': token }, signal: c.signal });
+    if (!r.ok) throw new Error('fd ' + r.status);
+    return await r.json();
+  } finally { clearTimeout(t); }
 }
 
 export default async function handler(req, res) {
   cors(res);
+  res.setHeader('Cache-Control', 's-maxage=300, stale-while-revalidate=600');
   if (req.method === 'OPTIONS') return res.status(200).end();
   const token = process.env.FOOTBALL_DATA_TOKEN;
   if (!token) return res.status(500).json({ ok: false, error: 'Falta FOOTBALL_DATA_TOKEN' });
@@ -76,7 +82,7 @@ export default async function handler(req, res) {
     const to = new Date(base.getTime() + 6 * 86400000).toISOString().split('T')[0];
     const key = from + '_' + to;
 
-    if (!cache.data || cache.key !== key || now - cache.ts > 10 * 60 * 1000) {
+    if (!cache.data || cache.key !== key || now - cache.ts > 30 * 60 * 1000) {
       const results = await Promise.all(CODES.map(function (c) {
         return fd('/competitions/' + c + '/matches?dateFrom=' + from + '&dateTo=' + to, token)
           .then(function (r) { return { c: c, m: r.matches || [] }; })
@@ -90,18 +96,15 @@ export default async function handler(req, res) {
 
     const comps = {};
     cache.data.forEach(function (m) { comps[m.competition.id] = true; });
-    for (const cid of Object.keys(comps)) {
-      const entry = HIST[cid];
-      const ttl = (entry && entry.ok) ? 60 * 60 * 1000 : 5 * 60 * 1000;
-      if (!entry || now - entry.ts > ttl) {
-        try {
-          const h = await fd('/competitions/' + cid + '/matches?status=FINISHED&limit=60', token);
-          HIST[cid] = { ratings: buildRatings(h.matches || []), form: buildForm(h.matches || []), ts: now, ok: true };
-        } catch (e) {
-          HIST[cid] = { ratings: {}, form: {}, ts: now, ok: false };
-        }
-      }
-    }
+    const compIds = Object.keys(comps).slice(0, 5);
+    await Promise.all(compIds.map(function (cid) {
+      const e = HIST[cid];
+      const ttl = (e && e.ok) ? 60 * 60 * 1000 : 5 * 60 * 1000;
+      if (e && now - e.ts < ttl) return Promise.resolve();
+      return fd('/competitions/' + cid + '/matches?status=FINISHED&limit=60', token)
+        .then(function (h) { HIST[cid] = { ratings: buildRatings(h.matches || []), form: buildForm(h.matches || []), ts: now, ok: true }; })
+        .catch(function () { HIST[cid] = { ratings: {}, form: {}, ts: now, ok: false }; });
+    }));
 
     const out = [];
     cache.data.forEach(function (m) {
@@ -127,4 +130,4 @@ export default async function handler(req, res) {
   } catch (e) {
     res.status(500).json({ ok: false, error: String(e.message || e) });
   }
-      }
+                                                           }
