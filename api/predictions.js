@@ -1,7 +1,6 @@
 const API = 'https://api.football-data.org/v4';
 const CODES = ['CL', 'EL', 'PL', 'PD', 'SA', 'BL', 'FL1', 'DED'];
 const cache = { data: null, ts: 0, key: '' };
-const HIST = {};
 
 function cors(res) {
   res.setHeader('Access-Control-Allow-Origin', '*');
@@ -35,7 +34,7 @@ function buildRatings(matches) {
   const R = {};
   for (const k in T) {
     const t = T[k];
-    if (t.n < 3) continue;
+    if (t.n < 2) continue;
     R[k] = { att: cl(t.gf / t.n / 1.35, 0.5, 2.5), def: cl(t.ga / t.n / 1.35, 0.5, 2.5) };
   }
   return R;
@@ -82,11 +81,12 @@ export default async function handler(req, res) {
     const to = new Date(base.getTime() + 6 * 86400000).toISOString().split('T')[0];
     const key = from + '_' + to;
 
+    // UNA sola tanda de 8 llamadas en paralelo (rápido, dentro del límite)
     if (!cache.data || cache.key !== key || now - cache.ts > 30 * 60 * 1000) {
       const results = await Promise.all(CODES.map(function (c) {
         return fd('/competitions/' + c + '/matches?dateFrom=' + from + '&dateTo=' + to, token)
-          .then(function (r) { return { c: c, m: r.matches || [] }; })
-          .catch(function () { return { c: c, m: [] }; });
+          .then(function (r) { return { m: r.matches || [] }; })
+          .catch(function () { return { m: [] }; });
       }));
       const map = {};
       results.forEach(function (r) { r.m.forEach(function (m) { map[m.id] = m; }); });
@@ -94,24 +94,18 @@ export default async function handler(req, res) {
       cache.ts = now; cache.key = key;
     }
 
-    const comps = {};
-    cache.data.forEach(function (m) { comps[m.competition.id] = true; });
-    const compIds = Object.keys(comps).slice(0, 5);
-    await Promise.all(compIds.map(function (cid) {
-      const e = HIST[cid];
-      const ttl = (e && e.ok) ? 60 * 60 * 1000 : 5 * 60 * 1000;
-      if (e && now - e.ts < ttl) return Promise.resolve();
-      return fd('/competitions/' + cid + '/matches?status=FINISHED&limit=60', token)
-        .then(function (h) { HIST[cid] = { ratings: buildRatings(h.matches || []), form: buildForm(h.matches || []), ts: now, ok: true }; })
-        .catch(function () { HIST[cid] = { ratings: {}, form: {}, ts: now, ok: false }; });
-    }));
+    // Ratings y forma se calculan de los partidos YA TERMINADOS de la ventana (sin llamadas extra)
+    const finished = cache.data.filter(function (m) {
+      const s = (m.status || '').toUpperCase();
+      return s.indexOf('FIN') === 0 || s.indexOf('FINAL') === 0;
+    });
+    const RAT = buildRatings(finished);
+    const FORM = buildForm(finished);
 
     const out = [];
     cache.data.forEach(function (m) {
-      const H = HIST[m.competition.id] || { ratings: {}, form: {} };
-      const R = H.ratings || {}; const F = H.form || {};
-      const home = R[m.homeTeam.name] || { att: 1, def: 1 };
-      const away = R[m.awayTeam.name] || { att: 1, def: 1 };
+      const home = RAT[m.homeTeam.name] || { att: 1, def: 1 };
+      const away = RAT[m.awayTeam.name] || { att: 1, def: 1 };
       const hL = cl(1.35 * home.att * away.def * 1.15, 0.3, 3.5);
       const aL = cl(1.35 * away.att * home.def, 0.2, 3.0);
       const probs = calcProbs(hL, aL);
@@ -122,7 +116,7 @@ export default async function handler(req, res) {
         league: m.competition.name, time: m.utcDate, status: m.status,
         score: m.score && m.score.fullTime ? { home: m.score.fullTime.home, away: m.score.fullTime.away } : null,
         probs, main, hL: +hL.toFixed(2), aL: +aL.toFixed(2),
-        formHome: F[m.homeTeam.name] || [], formAway: F[m.awayTeam.name] || []
+        formHome: FORM[m.homeTeam.name] || [], formAway: FORM[m.awayTeam.name] || []
       });
     });
     out.sort(function (a, b) { return (a.time || '').localeCompare(b.time || ''); });
@@ -130,4 +124,4 @@ export default async function handler(req, res) {
   } catch (e) {
     res.status(500).json({ ok: false, error: String(e.message || e) });
   }
-                                                           }
+      }
