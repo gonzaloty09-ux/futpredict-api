@@ -1,4 +1,5 @@
 const API = 'https://api.football-data.org/v4';
+const CODES = ['CL', 'EL', 'PL', 'PD', 'SA', 'BL', 'FL1', 'DED', 'PPL', 'BSA'];
 const cache = { data: null, ts: 0, key: '' };
 const HIST = {};
 
@@ -39,9 +40,26 @@ function buildRatings(matches) {
   }
   return R;
 }
+function buildForm(matches) {
+  const sorted = matches.slice().sort(function (a, b) { return (a.utcDate || '').localeCompare(b.utcDate || ''); });
+  const F = {};
+  sorted.forEach(function (m) {
+    const hs = m.score && m.score.fullTime ? m.score.fullTime.home : null;
+    const as = m.score && m.score.fullTime ? m.score.fullTime.away : null;
+    if (hs == null || as == null) return;
+    const hn = m.homeTeam.name, an = m.awayTeam.name;
+    const hr = hs > as ? 'W' : hs < as ? 'L' : 'D';
+    const ar = hs > as ? 'L' : hs < as ? 'W' : 'D';
+    (F[hn] = F[hn] || []).push(hr);
+    (F[an] = F[an] || []).push(ar);
+  });
+  const out = {};
+  for (const k in F) out[k] = F[k].slice(-5).reverse();
+  return out;
+}
 async function fd(path, token) {
   const r = await fetch(API + path, { headers: { 'X-Auth-Token': token } });
-  if (!r.ok) throw new Error('football-data error ' + r.status);
+  if (!r.ok) throw new Error('football-data error ' + r.status + ' en ' + path);
   return r.json();
 }
 
@@ -52,34 +70,43 @@ export default async function handler(req, res) {
   if (!token) return res.status(500).json({ ok: false, error: 'Falta FOOTBALL_DATA_TOKEN' });
   try {
     const now = Date.now();
-    // Fecha opcional: /api/predictions?date=YYYY-MM-DD
     const qDate = req.query.date || null;
     const base = qDate ? new Date(qDate + 'T12:00:00Z') : new Date();
     const from = new Date(base.getTime() - 1 * 86400000).toISOString().split('T')[0];
     const to = new Date(base.getTime() + 6 * 86400000).toISOString().split('T')[0];
-    const cacheKey = from + '_' + to;
+    const key = from + '_' + to;
 
-    if (!cache.data || cache.key !== cacheKey || now - cache.ts > 10 * 60 * 1000) {
-      const fx = await fd('/matches?dateFrom=' + from + '&dateTo=' + to, token);
-      cache.data = fx.matches || [];
-      cache.ts = now;
-      cache.key = cacheKey;
+    if (!cache.data || cache.key !== key || now - cache.ts > 10 * 60 * 1000) {
+      const results = await Promise.all(CODES.map(function (c) {
+        return fd('/competitions/' + c + '/matches?dateFrom=' + from + '&dateTo=' + to, token)
+          .then(function (r) { return { c: c, m: r.matches || [] }; })
+          .catch(function () { return { c: c, m: [] }; });
+      }));
+      const map = {};
+      results.forEach(function (r) { r.m.forEach(function (m) { map[m.id] = m; }); });
+      cache.data = Object.values(map);
+      cache.ts = now; cache.key = key;
     }
 
     const comps = {};
-    for (const m of cache.data) comps[m.competition.id] = true;
+    cache.data.forEach(function (m) { comps[m.competition.id] = true; });
     for (const cid of Object.keys(comps)) {
-      if (!HIST[cid] || now - HIST[cid].ts > 60 * 60 * 1000) {
+      const entry = HIST[cid];
+      const ttl = (entry && entry.ok) ? 60 * 60 * 1000 : 5 * 60 * 1000;
+      if (!entry || now - entry.ts > ttl) {
         try {
           const h = await fd('/competitions/' + cid + '/matches?status=FINISHED&limit=60', token);
-          HIST[cid] = { ratings: buildRatings(h.matches || []), ts: now };
-        } catch (e) { HIST[cid] = { ratings: {}, ts: now }; }
+          HIST[cid] = { ratings: buildRatings(h.matches || []), form: buildForm(h.matches || []), ts: now, ok: true };
+        } catch (e) {
+          HIST[cid] = { ratings: {}, form: {}, ts: now, ok: false };
+        }
       }
     }
 
     const out = [];
-    for (const m of cache.data) {
-      const R = (HIST[m.competition.id] && HIST[m.competition.id].ratings) || {};
+    cache.data.forEach(function (m) {
+      const H = HIST[m.competition.id] || { ratings: {}, form: {} };
+      const R = H.ratings || {}; const F = H.form || {};
       const home = R[m.homeTeam.name] || { att: 1, def: 1 };
       const away = R[m.awayTeam.name] || { att: 1, def: 1 };
       const hL = cl(1.35 * home.att * away.def * 1.15, 0.3, 3.5);
@@ -88,19 +115,16 @@ export default async function handler(req, res) {
       const main = probs.home >= probs.draw && probs.home >= probs.away ? 'home'
         : probs.away >= probs.home && probs.away >= probs.draw ? 'away' : 'draw';
       out.push({
-        id: m.id,
-        home: m.homeTeam.name,
-        away: m.awayTeam.name,
-        league: m.competition.name,
-        time: m.utcDate,
-        status: m.status,
+        id: m.id, home: m.homeTeam.name, away: m.awayTeam.name,
+        league: m.competition.name, time: m.utcDate, status: m.status,
         score: m.score && m.score.fullTime ? { home: m.score.fullTime.home, away: m.score.fullTime.away } : null,
-        probs, main, hL: +hL.toFixed(2), aL: +aL.toFixed(2)
+        probs, main, hL: +hL.toFixed(2), aL: +aL.toFixed(2),
+        formHome: F[m.homeTeam.name] || [], formAway: F[m.awayTeam.name] || []
       });
-    }
-    out.sort((a, b) => (a.time || '').localeCompare(b.time || ''));
-    res.status(200).json({ ok: true, count: out.length, window: { from, to }, predictions: out, generated: new Date().toISOString() });
+    });
+    out.sort(function (a, b) { return (a.time || '').localeCompare(b.time || ''); });
+    res.status(200).json({ ok: true, count: out.length, window: { from, to }, competitions: CODES, predictions: out, generated: new Date().toISOString() });
   } catch (e) {
     res.status(500).json({ ok: false, error: String(e.message || e) });
   }
-  }
+      }
