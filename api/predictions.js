@@ -1,5 +1,4 @@
 const API = 'https://api.football-data.org/v4';
-const CODES = ['CL', 'EL', 'PL', 'PD', 'SA', 'BL', 'FL1', 'DED'];
 const cache = { data: null, ts: 0, key: '' };
 const HIST = {};
 
@@ -58,7 +57,7 @@ function buildForm(matches) {
   return out;
 }
 async function fd(path, token, ms) {
-  ms = ms || 8000;
+  ms = ms || 6000;
   const c = new AbortController();
   const t = setTimeout(function () { c.abort(); }, ms);
   try {
@@ -83,20 +82,21 @@ export default async function handler(req, res) {
     const key = from + '_' + to;
 
     if (!cache.data || cache.key !== key || now - cache.ts > 30 * 60 * 1000) {
-      const results = await Promise.all(CODES.map(function (c) {
-        return fd('/competitions/' + c + '/matches?dateFrom=' + from + '&dateTo=' + to, token)
-          .then(function (r) { return { m: r.matches || [] }; })
-          .catch(function () { return { m: [] }; });
-      }));
+      // 1 llamada GLOBAL (todas las ligas del token) + 2 forzadas (CL y EL)
+      const all = await Promise.all([
+        fd('/matches?dateFrom=' + from + '&dateTo=' + to, token).then(function (r) { return r.matches || []; }).catch(function () { return []; }),
+        fd('/competitions/CL/matches?dateFrom=' + from + '&dateTo=' + to, token).then(function (r) { return r.matches || []; }).catch(function () { return []; }),
+        fd('/competitions/EL/matches?dateFrom=' + from + '&dateTo=' + to, token).then(function (r) { return r.matches || []; }).catch(function () { return []; })
+      ]);
       const map = {};
-      results.forEach(function (r) { r.m.forEach(function (m) { map[m.id] = m; }); });
+      all.forEach(function (arr) { arr.forEach(function (m) { map[m.id] = m; }); });
       cache.data = Object.values(map);
       cache.ts = now; cache.key = key;
     }
 
     const comps = {};
     cache.data.forEach(function (m) { comps[m.competition.id] = true; });
-    const compIds = Object.keys(comps).slice(0, 5);
+    const compIds = Object.keys(comps).slice(0, 4);
     await Promise.all(compIds.map(function (cid) {
       const e = HIST[cid];
       const ttl = (e && e.ok) ? 60 * 60 * 1000 : 5 * 60 * 1000;
@@ -126,7 +126,7 @@ export default async function handler(req, res) {
       });
     });
     out.sort(function (a, b) { return (a.time || '').localeCompare(b.time || ''); });
-    res.status(200).json({ ok: true, count: out.length, window: { from, to }, competitions: CODES, predictions: out, generated: new Date().toISOString() });
+    res.status(200).json({ ok: true, count: out.length, window: { from, to }, predictions: out, generated: new Date().toISOString() });
   } catch (e) {
     res.status(500).json({ ok: false, error: String(e.message || e) });
   }
