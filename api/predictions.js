@@ -148,6 +148,10 @@ function findOdds(list, fh, fa) {
   }
   return null;
 }
+function isUpcoming(status) {
+  const s = (status || '').toUpperCase();
+  return s.indexOf('FIN') !== 0 && s.indexOf('POST') !== 0;
+}
 
 export default async function handler(req, res) {
   cors(res);
@@ -176,17 +180,21 @@ export default async function handler(req, res) {
       cache.ts = now; cache.key = key;
     }
 
-    // Ratings de respaldo con los YA TERMINADOS de la ventana (para que la 1ª carga no sea genérica)
-    const finished = cache.data.filter(function (m) { const s = (m.status || '').toUpperCase(); return s.indexOf('FIN') === 0; });
+    const finished = cache.data.filter(function (m) { return !isUpcoming(m.status); });
     const FB = buildRatings(finished, now);
 
     const comps = {};
-    cache.data.forEach(function (m) { comps[m.competition.id] = true; });
+    const upcomingComps = {};
+    cache.data.forEach(function (m) {
+      comps[m.competition.id] = true;
+      if (isUpcoming(m.status)) upcomingComps[m.competition.id] = true;
+    });
     const missing = Object.keys(comps).filter(function (cid) {
       const e = HIST[cid];
       const ttl = (e && e.ok) ? 60 * 60 * 1000 : 5 * 60 * 1000;
       return !e || now - e.ts > ttl;
     });
+    missing.sort(function (a, b) { return (upcomingComps[b] ? 1 : 0) - (upcomingComps[a] ? 1 : 0); });
     await Promise.all(missing.slice(0, 5).map(function (cid) {
       return fd('/competitions/' + cid + '/matches?status=FINISHED&limit=80', token)
         .then(function (h) {
@@ -211,27 +219,28 @@ export default async function handler(req, res) {
       const aL = cl(lA * away.attA * home.defH, 0.2, 3.2);
       const sampleN = (home.n + away.n) / 2;
       const bp = buildProbs(hL, aL, sampleN);
+      const formOf = function (team) { return (H && H.form && H.form[team]) ? H.form[team] : []; };
       out.push({
         id: m.id, home: hn, away: an,
         league: m.competition.name, time: m.utcDate, status: m.status,
         score: m.score && m.score.fullTime ? { home: m.score.fullTime.home, away: m.score.fullTime.away } : null,
         probs: bp.probs, modelProbs: bp.probs, main: '', hL: +hL.toFixed(2), aL: +aL.toFixed(2), sampleN: Math.round(sampleN),
-        formHome: ((H && H.form) || {})[hn] || ((FB && {}) ? (buildFormCache(m.competition.id, hn)) : []),
-        formAway: ((H && H.form) || {})[an] || (buildFormCache(m.competition.id, an)),
+        formHome: formOf(hn), formAway: formOf(an),
         odds: null, value: []
       });
     });
-    function buildFormCache(cid, team) {
-      const H = HIST[cid];
-      return (H && H.form && H.form[team]) ? H.form[team] : [];
-    }
 
     if (oddsKey) {
       const sports = {};
-      out.forEach(function (p) { const s = mapLeague(p.league); if (s) sports[s] = true; });
+      const upSports = {};
+      out.forEach(function (p) {
+        const s = mapLeague(p.league);
+        if (s) { sports[s] = true; if (isUpcoming(p.status)) upSports[s] = true; }
+      });
       const need = Object.keys(sports).filter(function (s) {
         const e = ODDS[s]; return !e || now - e.ts > 30 * 60 * 1000;
       });
+      need.sort(function (a, b) { return (upSports[b] ? 1 : 0) - (upSports[a] ? 1 : 0); });
       await Promise.all(need.slice(0, 2).map(function (s) {
         return fetchOdds(s, oddsKey)
           .then(function (list) { ODDS[s] = { list: list, ts: now }; })
@@ -268,4 +277,4 @@ export default async function handler(req, res) {
   } catch (e) {
     res.status(500).json({ ok: false, error: String(e.message || e) });
   }
-                            }
+    }
