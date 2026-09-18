@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>⚽ FutPredict Pro v18.1</title>
+<title>⚽ FutPredict Pro v18.2</title>
 <style>
 *{margin:0;padding:0;box-sizing:border-box;font-family:Arial,sans-serif}
 :root{--p:#00ff88;--s:#00d4ff;--bg:#0a0e1a;--c:rgba(255,255,255,.05);--t:#fff;--t2:#a0a0b0;--d:#ff4757;--w:#ffa502}
@@ -68,7 +68,7 @@ h1{font-size:1.5rem;color:var(--p);text-align:center}
 </head>
 <body>
 <h1>⚽ FutPredict Pro</h1>
-<div class="sub">v18.1 · datos reales · stats visibles · métricas medidas</div>
+<div class="sub">v18.2 · datos reales + cuotas de mercado + value bets</div>
 <div class="st" id="st">⏳ Conectando...</div>
 
 <div class="tabs">
@@ -86,7 +86,7 @@ h1{font-size:1.5rem;color:var(--p);text-align:center}
   </div>
   <div class="chips" id="chips"></div>
   <div class="grid" id="grid"></div>
-  <div class="note">Poisson/Dixon-Coles sobre ratings reales. "est"=estimado del modelo. No es consejo de apuesta. +18.</div>
+  <div class="note">Poisson/Dixon-Coles + ratings reales + mezcla con mercado. "est"=estimado. No es consejo de apuesta. +18.</div>
 </div>
 
 <div class="pane" id="pane-d">
@@ -126,7 +126,7 @@ function load(){
   fetch('api/predictions',{signal:ctl.signal}).then(function(r){clearTimeout(to);return r.json();}).then(function(d){
     if(!d.ok)throw new Error(d.error||'backend devolvió error');
     ALL=d.predictions||[];
-    $('st').className='st ok';$('st').textContent='✅ '+ALL.length+' partidos reales ('+(d.window?d.window.from+'→'+d.window.to:'')+')';
+    $('st').className='st ok';$('st').textContent='✅ '+ALL.length+' partidos reales ('+(d.window?d.window.from+'→'+d.window.to:'')+')'+(d.oddsEnabled?' · 💰 cuotas activas':'');
     sync();chips();render();dash();
   }).catch(function(e){
     clearTimeout(to);
@@ -160,7 +160,10 @@ function render(){var tk=tkey();var list=ALL.filter(function(m){if(curL!=='all'&
       h+='<div class="pbox"><div class="pm"><div class="ps">'+sc+'</div><div class="pt">'+mt+'<br>@'+fairOdds(mp)+'</div></div></div>'+
       '<div class="probs"><div class="pi"><div class="pl">Local</div><div class="pb"><div class="pf" data-w="'+m.probs.home+'"></div></div><div class="pv">'+m.probs.home+'%</div></div><div class="pi"><div class="pl">Empate</div><div class="pb"><div class="pf" data-w="'+m.probs.draw+'"></div></div><div class="pv">'+m.probs.draw+'%</div></div><div class="pi"><div class="pl">Visit.</div><div class="pb"><div class="pf" data-w="'+m.probs.away+'"></div></div><div class="pv">'+m.probs.away+'%</div></div></div>'+
       '<div class="mk"><div class="mi"><div class="ml">+1.5</div><div class="mv">'+mk.o15+'%</div></div><div class="mi"><div class="ml">+2.5</div><div class="mv">'+mk.o25+'%</div></div><div class="mi"><div class="ml">+3.5</div><div class="mv">'+mk.o35+'%</div></div><div class="mi"><div class="ml">BTTS</div><div class="mv">'+mk.bt+'%</div></div></div>'+
-      '<div class="mk3"><div class="mi"><div class="ml">Tiros est</div><div class="mv">'+es.shH+'-'+es.shA+'</div></div><div class="mi"><div class="ml">A puerta est</div><div class="mv">'+es.soH+'-'+es.soA+'</div></div><div class="mi"><div class="ml">Córners est</div><div class="mv">'+es.coH+'-'+es.coA+'</div></div></div>';}
+      '<div class="mk3"><div class="mi"><div class="ml">Tiros est</div><div class="mv">'+es.shH+'-'+es.shA+'</div></div><div class="mi"><div class="ml">A puerta est</div><div class="mv">'+es.soH+'-'+es.soA+'</div></div><div class="mi"><div class="ml">Córners est</div><div class="mv">'+es.coH+'-'+es.coA+'</div></div></div>'+
+      '<div class="mk3"><div class="mi"><div class="ml">Faltas</div><div class="mv">n/d</div></div><div class="mi"><div class="ml">Posesión</div><div class="mv">n/d</div></div><div class="mi"><div class="ml">Tarjetas</div><div class="mv">n/d</div></div></div>'+
+      (m.odds?'<div class="mk3"><div class="mi"><div class="ml">Cuota 1</div><div class="mv">'+m.odds.h+'</div></div><div class="mi"><div class="ml">Cuota X</div><div class="mv">'+m.odds.d+'</div></div><div class="mi"><div class="ml">Cuota 2</div><div class="mv">'+m.odds.a+'</div></div></div>':'')+
+      (m.value&&m.value.length?'<div class="note" style="color:var(--p);font-weight:bold">💎 Value: '+m.value.map(function(v){return v.side+' +'+v.edge+'%';}).join(' · ')+'</div>':'');}
     h+='</div>';});
   $('grid').innerHTML=h;
   requestAnimationFrame(function(){var e=document.querySelectorAll('.pf');for(var i=0;i<e.length;i++)e[i].style.width=(e[i].getAttribute('data-w')||0)+'%';});
@@ -171,14 +174,15 @@ function openM(id){var m=null;for(var i=0;i<ALL.length;i++){if(ALL[i].id===id){m
   $('mb').innerHTML='<div class="stt" style="text-align:center;font-size:.95rem;color:var(--p)">📊 '+m.home+' vs '+m.away+'</div>'+
    '<div class="sec"><div class="stt">🔮 Predicción</div><div class="rw"><span class="rl">Marcador</span><span class="rv">'+mk.top[0].h+'-'+mk.top[0].a+'</span></div><div class="rw"><span class="rl">Resultado</span><span class="rv">'+mt+' ('+mp+'%)</span></div><div class="rw"><span class="rl">1/X/2</span><span class="rv">'+m.probs.home+'/'+m.probs.draw+'/'+m.probs.away+'</span></div><div class="rw"><span class="rl">λ</span><span class="rv">'+m.hL+' / '+m.aL+'</span></div><div class="rw"><span class="rl">Forma L/V</span><span class="rv">'+(m.formHome||[]).join('')+' / '+(m.formAway||[]).join('')+'</span></div></div>'+
    '<div class="sec"><div class="stt">📈 Goles</div><div class="rw"><span class="rl">+1.5/+2.5/+3.5</span><span class="rv">'+mk.o15+'/'+mk.o25+'/'+mk.o35+'</span></div><div class="rw"><span class="rl">BTTS</span><span class="rv">'+mk.bt+'%</span></div><div class="rw"><span class="rl">Top</span><span class="rv">'+mk.top.map(function(s){return s.h+'-'+s.a;}).join(', ')+'</span></div></div>'+
-   '<div class="sec"><div class="stt">📊 Stats estimadas</div><div class="rw"><span class="rl">Tiros</span><span class="rv">'+es.shH+' - '+es.shA+'</span></div><div class="rw"><span class="rl">A puerta</span><span class="rv">'+es.soH+' - '+es.soA+'</span></div><div class="rw"><span class="rl">Córners</span><span class="rv">'+es.coH+' - '+es.coA+'</span></div></div>';
+   '<div class="sec"><div class="stt">📊 Stats estimadas</div><div class="rw"><span class="rl">Tiros</span><span class="rv">'+es.shH+' - '+es.shA+'</span></div><div class="rw"><span class="rl">A puerta</span><span class="rv">'+es.soH+' - '+es.soA+'</span></div><div class="rw"><span class="rl">Córners</span><span class="rv">'+es.coH+' - '+es.coA+'</span></div><div class="rw"><span class="rl">Faltas/Posesión/Tarjetas</span><span class="rv">n/d (API gratuita)</span></div></div>'+
+   (m.odds?'<div class="sec"><div class="stt">💰 Mercado</div><div class="rw"><span class="rl">Cuota 1/X/2</span><span class="rv">'+m.odds.h+' / '+m.odds.d+' / '+m.odds.a+'</span></div><div class="rw"><span class="rl">Prob. mercado</span><span class="rv">'+(m.marketProbs?m.marketProbs.home+'/'+m.marketProbs.draw+'/'+m.marketProbs.away:'-')+'</span></div><div class="rw"><span class="rl">Value</span><span class="rv">'+(m.value&&m.value.length?m.value.map(function(v){return v.side+' +'+v.edge+'%';}).join(', '):'—')+'</span></div></div>':'');
   $('modal').classList.add('on');}
 function closeM(){$('modal').classList.remove('on');}
 $('modal').addEventListener('click',function(e){if(e.target.id==='modal')closeM();});
 function dash(){var p=Object.values(DB.preds);var d=p.filter(function(x){return x.estado!=='pend';});var w=d.filter(function(x){return x.estado==='win';}).length;
   $('dAcc').textContent=d.length?Math.round(w/d.length*100)+'%':'--';$('dN').textContent=p.length;$('dW').textContent=w;$('dL').textContent=d.length-w;hist();}
 function hist(){var p=Object.values(DB.preds);if(!p.length){$('hlist').innerHTML='<div class="note">📭 Sin registros.</div>';return;}
-  $('hlist').innerHTML=p.reverse().slice(0,50).map(function(x){return '<div class="hist"><div><b>'+x.home+' vs '+x.away+'</b><div style="font-size:.62rem;color:var(--t2)">Pred '+x.score+(x.rs?' · Real '+x.rs:'')+'</div></div><span class="rb '+x.estado+'">'+(x.estado==='win'?'✅':(x.estado==='loss'?'❌':''))+'</span></div>';}).join('');}
+  $('hlist').innerHTML=p.reverse().slice(0,50).map(function(x){return '<div class="hist"><div><b>'+x.home+' vs '+x.away+'</b><div style="font-size:.62rem;color:var(--t2)">Pred '+x.score+(x.rs?' · Real '+x.rs:'')+'</div></div><span class="rb '+x.estado+'">'+(x.estado==='win'?'✅':(x.estado==='loss'?'❌':'⏳'))+'</span></div>';}).join('');}
 function tab(k,el){var b=document.querySelectorAll('.tb');for(var i=0;i<b.length;i++)b[i].classList.remove('on');el.classList.add('on');
   var p=document.querySelectorAll('.pane');for(var j=0;j<p.length;j++)p[j].classList.remove('on');$('pane-'+k).classList.add('on');if(k==='d')dash();if(k==='h')hist();}
 load();
