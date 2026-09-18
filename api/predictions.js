@@ -1,6 +1,10 @@
 const API = 'https://api.football-data.org/v4';
+const ODDS_API = 'https://api.the-odds-api.com/v4';
 const cache = { data: null, ts: 0, key: '' };
 const HIST = {};
+const ODDS = {};
+const RHO = -0.06;
+const MARKET_W = 0.4;
 
 function cors(res) {
   res.setHeader('Access-Control-Allow-Origin', '*');
@@ -8,36 +12,65 @@ function cors(res) {
   res.setHeader('Access-Control-Allow-Headers', 'Content-Type');
 }
 function cl(v, a, b) { return Math.max(a, Math.min(b, v)); }
+function normName(s) {
+  return String(s).toLowerCase()
+    .replace(/[áàäâéèëêíìïîóòöôúùüûñç]/g, function (c) {
+      return { á: 'a', à: 'a', ä: 'a', â: 'a', é: 'e', è: 'e', ë: 'e', ê: 'e', í: 'i', ì: 'i', ï: 'i', î: 'i', ó: 'o', ò: 'o', ö: 'o', ô: 'o', ú: 'u', ù: 'u', ü: 'u', û: 'u', ñ: 'n', ç: 'c' }[c] || c;
+    })
+    .replace(/[^a-z0-9 ]/g, '').replace(/\s+/g, ' ').trim();
+}
+function mapLeague(name) {
+  const n = String(name).toLowerCase();
+  if (n.indexOf('premier league') !== -1) return 'soccer_epl';
+  if (n.indexOf('primera division') !== -1 || n.indexOf('la liga') !== -1) return 'soccer_spain_la_liga';
+  if (n.indexOf('serie a') !== -1) return 'soccer_italy_serie_a';
+  if (n.indexOf('bundesliga') !== -1) return 'soccer_germany_bundesliga';
+  if (n.indexOf('ligue 1') !== -1) return 'soccer_france_ligue_one';
+  if (n.indexOf('champions') !== -1) return 'soccer_uefa_champs_league';
+  if (n.indexOf('europa league') !== -1) return 'soccer_uefa_europa_league';
+  if (n.indexOf('eredivisie') !== -1) return 'soccer_netherlands_eredivisie';
+  if (n.indexOf('primeira liga') !== -1) return 'soccer_portugal_primeira_liga';
+  if (n.indexOf('mls') !== -1) return 'soccer_usa_mls';
+  return null;
+}
 function factorial(n) { let r = 1; for (let i = 2; i <= n; i++) r *= i; return r; }
 function poisson(l, k) { return (Math.pow(l, k) * Math.exp(-l)) / factorial(k); }
-function calcProbs(hL, aL) {
-  let hW = 0, d = 0, aW = 0;
-  for (let h = 0; h <= 7; h++) for (let a = 0; a <= 7; a++) {
-    const p = poisson(hL, h) * poisson(aL, a);
-    if (h > a) hW += p; else if (h === a) d += p; else aW += p;
-  }
-  const t = hW + d + aW;
-  return { home: Math.round(hW / t * 100), draw: Math.round(d / t * 100), away: Math.round(aW / t * 100) };
+function tau(h, a, hL, aL, rho) {
+  if (h === 0 && a === 0) return 1 - hL * aL * rho;
+  if (h === 0 && a === 1) return 1 + hL * rho;
+  if (h === 1 && a === 0) return 1 + aL * rho;
+  if (h === 1 && a === 1) return 1 - rho;
+  return 1;
 }
-function buildRatings(matches) {
-  const T = {};
-  for (const m of matches) {
+function buildRatings(matches, nowMs) {
+  const T = {}; let sh = 0, sa = 0, sw = 0;
+  matches.forEach(function (m) {
     const hs = m.score && m.score.fullTime ? m.score.fullTime.home : null;
     const as = m.score && m.score.fullTime ? m.score.fullTime.away : null;
-    if (hs == null || as == null) continue;
+    if (hs == null || as == null) return;
+    const t = new Date(m.utcDate).getTime();
+    const w = Math.exp(-((nowMs - t) / 86400000) / 28);
     const hn = m.homeTeam.name, an = m.awayTeam.name;
-    T[hn] = T[hn] || { gf: 0, ga: 0, n: 0 };
-    T[an] = T[an] || { gf: 0, ga: 0, n: 0 };
-    T[hn].gf += hs; T[hn].ga += as; T[hn].n++;
-    T[an].gf += as; T[an].ga += hs; T[an].n++;
-  }
+    const H = T[hn] = T[hn] || { hg: 0, hga: 0, hn: 0, ag: 0, aga: 0, an: 0 };
+    const A = T[an] = T[an] || { hg: 0, hga: 0, hn: 0, ag: 0, aga: 0, an: 0 };
+    H.hg += hs * w; H.hga += as * w; H.hn += w;
+    A.ag += as * w; A.aga += hs * w; A.an += w;
+    sh += hs * w; sa += as * w; sw += w;
+  });
+  const lH = sw ? sh / sw : 1.35, lA = sw ? sa / sw : 1.15;
   const R = {};
   for (const k in T) {
     const t = T[k];
-    if (t.n < 3) continue;
-    R[k] = { att: cl(t.gf / t.n / 1.35, 0.5, 2.5), def: cl(t.ga / t.n / 1.35, 0.5, 2.5) };
+    const kH = t.hn / (t.hn + 5), kA = t.an / (t.an + 5);
+    R[k] = {
+      attH: cl(t.hn ? 1 + (((t.hg / t.hn) / lH) - 1) * kH : 1, 0.4, 2.6),
+      defH: cl(t.hn ? 1 + (((t.hga / t.hn) / lA) - 1) * kH : 1, 0.4, 2.6),
+      attA: cl(t.an ? 1 + (((t.ag / t.an) / lA) - 1) * kA : 1, 0.4, 2.6),
+      defA: cl(t.an ? 1 + (((t.aga / t.an) / lH) - 1) * kA : 1, 0.4, 2.6),
+      n: t.hn + t.an
+    };
   }
-  return R;
+  return { R: R, lH: lH, lA: lA };
 }
 function buildForm(matches) {
   const sorted = matches.slice().sort(function (a, b) { return (a.utcDate || '').localeCompare(b.utcDate || ''); });
@@ -47,23 +80,62 @@ function buildForm(matches) {
     const as = m.score && m.score.fullTime ? m.score.fullTime.away : null;
     if (hs == null || as == null) return;
     const hn = m.homeTeam.name, an = m.awayTeam.name;
-    const hr = hs > as ? 'W' : hs < as ? 'L' : 'D';
-    const ar = hs > as ? 'L' : hs < as ? 'W' : 'D';
-    (F[hn] = F[hn] || []).push(hr);
-    (F[an] = F[an] || []).push(ar);
+    (F[hn] = F[hn] || []).push(hs > as ? 'W' : hs < as ? 'L' : 'D');
+    (F[an] = F[an] || []).push(hs > as ? 'L' : hs < as ? 'W' : 'D');
   });
   const out = {};
   for (const k in F) out[k] = F[k].slice(-5).reverse();
   return out;
 }
+function buildProbs(hL, aL, sampleN) {
+  const maxG = 8; let tot = 0, hW = 0, d = 0, aW = 0; const sc = [];
+  for (let h = 0; h <= maxG; h++) for (let a = 0; a <= maxG; a++) {
+    const p = poisson(hL, h) * poisson(aL, a) * tau(h, a, hL, aL, RHO);
+    tot += p; sc.push({ h: h, a: a, p: p / tot });
+    if (h > a) hW += p; else if (h === a) d += p; else aW += p;
+  }
+  sc.sort(function (x, y) { return y.p - x.p; });
+  const s = sampleN / (sampleN + 4); const b = 100 / 3;
+  let ph = Math.round(b + (hW / tot * 100 - b) * s);
+  let pd = Math.round(b + (d / tot * 100 - b) * s);
+  let pa = Math.round(b + (aW / tot * 100 - b) * s);
+  if (ph + pd + pa !== 100) pa = 100 - ph - pd;
+  return { probs: { home: ph, draw: pd, away: pa }, top: sc.slice(0, 3) };
+}
 async function fd(path, token, ms) {
   ms = ms || 6000;
-  const c = new AbortController();
-  const t = setTimeout(function () { c.abort(); }, ms);
+  const c = new AbortController(); const t = setTimeout(function () { c.abort(); }, ms);
   try {
     const r = await fetch(API + path, { headers: { 'X-Auth-Token': token }, signal: c.signal });
     if (!r.ok) throw new Error('fd ' + r.status);
     return await r.json();
+  } finally { clearTimeout(t); }
+}
+async function fetchOdds(sport, key) {
+  const c = new AbortController(); const t = setTimeout(function () { c.abort(); }, 6000);
+  try {
+    const r = await fetch(ODDS_API + '/sports/' + sport + '/odds?apiKey=' + key + '&regions=eu&markets=h2h&oddsFormat=decimal', { signal: c.signal });
+    if (!r.ok) throw new Error('odds ' + r.status);
+    const data = await r.json();
+    const map = {};
+    (data || []).forEach(function (ev) {
+      let h = 0, d = 0, a = 0, n = 0;
+      (ev.bookmakers || []).forEach(function (bk) {
+        (bk.markets || []).forEach(function (mk) {
+          if (mk.key !== 'h2h') return;
+          (mk.outcomes || []).forEach(function (oc) {
+            if (oc.name === ev.home_team) h += oc.price;
+            else if (oc.name === ev.away_team) a += oc.price;
+            else if (oc.name === 'Draw') d += oc.price;
+          });
+          n++;
+        });
+      });
+      if (n > 0 && h && d && a) {
+        map[normName(ev.home_team) + '|' + normName(ev.away_team)] = { h: h / n, d: d / n, a: a / n };
+      }
+    });
+    return map;
   } finally { clearTimeout(t); }
 }
 
@@ -72,6 +144,7 @@ export default async function handler(req, res) {
   res.setHeader('Cache-Control', 's-maxage=300, stale-while-revalidate=600');
   if (req.method === 'OPTIONS') return res.status(200).end();
   const token = process.env.FOOTBALL_DATA_TOKEN;
+  const oddsKey = process.env.ODDS_API_KEY || null;
   if (!token) return res.status(500).json({ ok: false, error: 'Falta FOOTBALL_DATA_TOKEN' });
   try {
     const now = Date.now();
@@ -82,7 +155,6 @@ export default async function handler(req, res) {
     const key = from + '_' + to;
 
     if (!cache.data || cache.key !== key || now - cache.ts > 30 * 60 * 1000) {
-      // 1 llamada GLOBAL (todas las ligas del token) + 2 forzadas (CL y EL)
       const all = await Promise.all([
         fd('/matches?dateFrom=' + from + '&dateTo=' + to, token).then(function (r) { return r.matches || []; }).catch(function () { return []; }),
         fd('/competitions/CL/matches?dateFrom=' + from + '&dateTo=' + to, token).then(function (r) { return r.matches || []; }).catch(function () { return []; }),
@@ -96,38 +168,81 @@ export default async function handler(req, res) {
 
     const comps = {};
     cache.data.forEach(function (m) { comps[m.competition.id] = true; });
-    const compIds = Object.keys(comps).slice(0, 4);
-    await Promise.all(compIds.map(function (cid) {
+    const missing = Object.keys(comps).filter(function (cid) {
       const e = HIST[cid];
       const ttl = (e && e.ok) ? 60 * 60 * 1000 : 5 * 60 * 1000;
-      if (e && now - e.ts < ttl) return Promise.resolve();
-      return fd('/competitions/' + cid + '/matches?status=FINISHED&limit=60', token)
-        .then(function (h) { HIST[cid] = { ratings: buildRatings(h.matches || []), form: buildForm(h.matches || []), ts: now, ok: true }; })
-        .catch(function () { HIST[cid] = { ratings: {}, form: {}, ts: now, ok: false }; });
+      return !e || now - e.ts > ttl;
+    });
+    await Promise.all(missing.slice(0, 5).map(function (cid) {
+      return fd('/competitions/' + cid + '/matches?status=FINISHED&limit=80', token)
+        .then(function (h) {
+          const rr = buildRatings(h.matches || [], now);
+          HIST[cid] = { R: rr.R, lH: rr.lH, lA: rr.lA, form: buildForm(h.matches || []), ts: now, ok: true };
+        })
+        .catch(function () { HIST[cid] = { R: {}, lH: 1.35, lA: 1.15, form: {}, ts: now, ok: false }; });
     }));
 
     const out = [];
     cache.data.forEach(function (m) {
-      const H = HIST[m.competition.id] || { ratings: {}, form: {} };
-      const R = H.ratings || {}; const F = H.form || {};
-      const home = R[m.homeTeam.name] || { att: 1, def: 1 };
-      const away = R[m.awayTeam.name] || { att: 1, def: 1 };
-      const hL = cl(1.35 * home.att * away.def * 1.15, 0.3, 3.5);
-      const aL = cl(1.35 * away.att * home.def, 0.2, 3.0);
-      const probs = calcProbs(hL, aL);
-      const main = probs.home >= probs.draw && probs.home >= probs.away ? 'home'
-        : probs.away >= probs.home && probs.away >= probs.draw ? 'away' : 'draw';
+      const H = HIST[m.competition.id] || { R: {}, lH: 1.35, lA: 1.15, form: {} };
+      const DEF = { attH: 1, defH: 1, attA: 1, defA: 1, n: 0 };
+      const home = H.R[m.homeTeam.name] || DEF;
+      const away = H.R[m.awayTeam.name] || DEF;
+      const hL = cl(H.lH * home.attH * away.defA, 0.25, 3.6);
+      const aL = cl(H.lA * away.attA * home.defH, 0.2, 3.2);
+      const sampleN = (home.n + away.n) / 2;
+      const bp = buildProbs(hL, aL, sampleN);
       out.push({
         id: m.id, home: m.homeTeam.name, away: m.awayTeam.name,
         league: m.competition.name, time: m.utcDate, status: m.status,
         score: m.score && m.score.fullTime ? { home: m.score.fullTime.home, away: m.score.fullTime.away } : null,
-        probs, main, hL: +hL.toFixed(2), aL: +aL.toFixed(2),
-        formHome: F[m.homeTeam.name] || [], formAway: F[m.awayTeam.name] || []
+        probs: bp.probs, modelProbs: bp.probs, main: '', hL: +hL.toFixed(2), aL: +aL.toFixed(2), sampleN: Math.round(sampleN),
+        formHome: (H.form || {})[m.homeTeam.name] || [], formAway: (H.form || {})[m.awayTeam.name] || [],
+        odds: null, value: []
       });
     });
+
+    // Capa de mercado (solo si hay key): mezcla modelo+cuotas y detecta value
+    if (oddsKey) {
+      const sports = {};
+      out.forEach(function (p) { const s = mapLeague(p.league); if (s) sports[s] = true; });
+      const need = Object.keys(sports).filter(function (s) {
+        const e = ODDS[s]; return !e || now - e.ts > 30 * 60 * 1000;
+      });
+      await Promise.all(need.slice(0, 3).map(function (s) {
+        return fetchOdds(s, oddsKey)
+          .then(function (map) { ODDS[s] = { map: map, ts: now }; })
+          .catch(function () { ODDS[s] = { map: {}, ts: now }; });
+      }));
+      out.forEach(function (p) {
+        const s = mapLeague(p.league); if (!s || !ODDS[s]) return;
+        const o = ODDS[s].map[normName(p.home) + '|' + normName(p.away)];
+        if (!o) return;
+        const ih = 1 / o.h, id = 1 / o.d, ia = 1 / o.a; const t = ih + id + ia;
+        const mh = ih / t * 100, md = id / t * 100, ma = ia / t * 100;
+        p.odds = { h: +o.h.toFixed(2), d: +o.d.toFixed(2), a: +o.a.toFixed(2) };
+        p.marketProbs = { home: Math.round(mh), draw: Math.round(md), away: Math.round(ma) };
+        p.probs = {
+          home: Math.round(p.modelProbs.home * (1 - MARKET_W) + mh * MARKET_W),
+          draw: Math.round(p.modelProbs.draw * (1 - MARKET_W) + md * MARKET_W),
+          away: Math.round(p.modelProbs.away * (1 - MARKET_W) + ma * MARKET_W)
+        };
+        if (p.probs.home + p.probs.draw + p.probs.away !== 100) p.probs.away = 100 - p.probs.home - p.probs.draw;
+        const v = [];
+        if (p.modelProbs.home - mh >= 4) v.push({ side: '1', edge: Math.round(p.modelProbs.home - mh) });
+        if (p.modelProbs.draw - md >= 4) v.push({ side: 'X', edge: Math.round(p.modelProbs.draw - md) });
+        if (p.modelProbs.away - ma >= 4) v.push({ side: '2', edge: Math.round(p.modelProbs.away - ma) });
+        p.value = v;
+      });
+    }
+
+    out.forEach(function (p) {
+      p.main = p.probs.home >= p.probs.draw && p.probs.home >= p.probs.away ? 'home'
+        : p.probs.away >= p.probs.home && p.probs.away >= p.probs.draw ? 'away' : 'draw';
+    });
     out.sort(function (a, b) { return (a.time || '').localeCompare(b.time || ''); });
-    res.status(200).json({ ok: true, count: out.length, window: { from, to }, predictions: out, generated: new Date().toISOString() });
+    res.status(200).json({ ok: true, count: out.length, window: { from, to }, oddsEnabled: !!oddsKey, predictions: out, generated: new Date().toISOString() });
   } catch (e) {
     res.status(500).json({ ok: false, error: String(e.message || e) });
   }
-}
+      }
