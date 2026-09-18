@@ -117,7 +117,7 @@ async function fetchOdds(sport, key) {
     const r = await fetch(ODDS_API + '/sports/' + sport + '/odds?apiKey=' + key + '&regions=eu&markets=h2h&oddsFormat=decimal', { signal: c.signal });
     if (!r.ok) throw new Error('odds ' + r.status);
     const data = await r.json();
-    const map = {};
+    const list = [];
     (data || []).forEach(function (ev) {
       let h = 0, d = 0, a = 0, n = 0;
       (ev.bookmakers || []).forEach(function (bk) {
@@ -131,12 +131,20 @@ async function fetchOdds(sport, key) {
           n++;
         });
       });
-      if (n > 0 && h && d && a) {
-        map[normName(ev.home_team) + '|' + normName(ev.away_team)] = { h: h / n, d: d / n, a: a / n };
-      }
+      if (n > 0 && h && d && a) list.push({ h: h / n, d: d / n, a: a / n, nh: normName(ev.home_team), na: normName(ev.away_team) });
     });
-    return map;
+    return list;
   } finally { clearTimeout(t); }
+}
+function findOdds(list, fh, fa) {
+  if (!fh || !fa) return null;
+  for (let i = 0; i < list.length; i++) {
+    const e = list[i];
+    const mh = (fh.indexOf(e.nh) !== -1 || e.nh.indexOf(fh) !== -1);
+    const ma = (fa.indexOf(e.na) !== -1 || e.na.indexOf(fa) !== -1);
+    if (mh && ma) return e;
+  }
+  return null;
 }
 
 export default async function handler(req, res) {
@@ -166,6 +174,10 @@ export default async function handler(req, res) {
       cache.ts = now; cache.key = key;
     }
 
+    // Ratings de respaldo con los YA TERMINADOS de la ventana (para que la 1ª carga no sea genérica)
+    const finished = cache.data.filter(function (m) { const s = (m.status || '').toUpperCase(); return s.indexOf('FIN') === 0; });
+    const FB = buildRatings(finished, now);
+
     const comps = {};
     cache.data.forEach(function (m) { comps[m.competition.id] = true; });
     const missing = Object.keys(comps).filter(function (cid) {
@@ -184,39 +196,48 @@ export default async function handler(req, res) {
 
     const out = [];
     cache.data.forEach(function (m) {
-      const H = HIST[m.competition.id] || { R: {}, lH: 1.35, lA: 1.15, form: {} };
+      const hn = m.homeTeam.name, an = m.awayTeam.name;
+      const H = HIST[m.competition.id];
+      let src = null;
+      if (H && H.ok && H.R[hn] && H.R[an]) src = H;
+      else if (FB.R[hn] && FB.R[an]) src = { R: FB.R, lH: FB.lH, lA: FB.lA, form: {} };
       const DEF = { attH: 1, defH: 1, attA: 1, defA: 1, n: 0 };
-      const home = H.R[m.homeTeam.name] || DEF;
-      const away = H.R[m.awayTeam.name] || DEF;
-      const hL = cl(H.lH * home.attH * away.defA, 0.25, 3.6);
-      const aL = cl(H.lA * away.attA * home.defH, 0.2, 3.2);
+      const home = src ? (src.R[hn] || DEF) : DEF;
+      const away = src ? (src.R[an] || DEF) : DEF;
+      const lH = src ? src.lH : 1.35, lA = src ? src.lA : 1.15;
+      const hL = cl(lH * home.attH * away.defA, 0.25, 3.6);
+      const aL = cl(lA * away.attA * home.defH, 0.2, 3.2);
       const sampleN = (home.n + away.n) / 2;
       const bp = buildProbs(hL, aL, sampleN);
       out.push({
-        id: m.id, home: m.homeTeam.name, away: m.awayTeam.name,
+        id: m.id, home: hn, away: an,
         league: m.competition.name, time: m.utcDate, status: m.status,
         score: m.score && m.score.fullTime ? { home: m.score.fullTime.home, away: m.score.fullTime.away } : null,
         probs: bp.probs, modelProbs: bp.probs, main: '', hL: +hL.toFixed(2), aL: +aL.toFixed(2), sampleN: Math.round(sampleN),
-        formHome: (H.form || {})[m.homeTeam.name] || [], formAway: (H.form || {})[m.awayTeam.name] || [],
+        formHome: ((H && H.form) || {})[hn] || ((FB && {}) ? (buildFormCache(m.competition.id, hn)) : []),
+        formAway: ((H && H.form) || {})[an] || (buildFormCache(m.competition.id, an)),
         odds: null, value: []
       });
     });
+    function buildFormCache(cid, team) {
+      const H = HIST[cid];
+      return (H && H.form && H.form[team]) ? H.form[team] : [];
+    }
 
-    // Capa de mercado (solo si hay key): mezcla modelo+cuotas y detecta value
     if (oddsKey) {
       const sports = {};
       out.forEach(function (p) { const s = mapLeague(p.league); if (s) sports[s] = true; });
       const need = Object.keys(sports).filter(function (s) {
         const e = ODDS[s]; return !e || now - e.ts > 30 * 60 * 1000;
       });
-      await Promise.all(need.slice(0, 3).map(function (s) {
+      await Promise.all(need.slice(0, 2).map(function (s) {
         return fetchOdds(s, oddsKey)
-          .then(function (map) { ODDS[s] = { map: map, ts: now }; })
-          .catch(function () { ODDS[s] = { map: {}, ts: now }; });
+          .then(function (list) { ODDS[s] = { list: list, ts: now }; })
+          .catch(function () { ODDS[s] = { list: [], ts: now }; });
       }));
       out.forEach(function (p) {
         const s = mapLeague(p.league); if (!s || !ODDS[s]) return;
-        const o = ODDS[s].map[normName(p.home) + '|' + normName(p.away)];
+        const o = findOdds(ODDS[s].list, normName(p.home), normName(p.away));
         if (!o) return;
         const ih = 1 / o.h, id = 1 / o.d, ia = 1 / o.a; const t = ih + id + ia;
         const mh = ih / t * 100, md = id / t * 100, ma = ia / t * 100;
@@ -245,4 +266,4 @@ export default async function handler(req, res) {
   } catch (e) {
     res.status(500).json({ ok: false, error: String(e.message || e) });
   }
-      }
+                            }
