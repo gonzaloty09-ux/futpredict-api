@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>⚽ FutPredict Pro v18</title>
+<title>⚽ FutPredict Pro v18.1</title>
 <style>
 *{margin:0;padding:0;box-sizing:border-box;font-family:Arial,sans-serif}
 :root{--p:#00ff88;--s:#00d4ff;--bg:#0a0e1a;--c:rgba(255,255,255,.05);--t:#fff;--t2:#a0a0b0;--d:#ff4757;--w:#ffa502}
@@ -45,6 +45,7 @@ h1{font-size:1.5rem;color:var(--p);text-align:center}
 .pf{height:100%;background:var(--p);width:0;transition:width .6s}
 .pv{font-size:.66rem;font-weight:bold;color:var(--p)}
 .mk{display:grid;grid-template-columns:repeat(4,1fr);gap:4px;margin:5px 0}
+.mk3{display:grid;grid-template-columns:repeat(3,1fr);gap:4px;margin:5px 0}
 .mi{background:rgba(0,0,0,.2);border-radius:6px;padding:4px;text-align:center}
 .ml{font-size:.52rem;color:var(--t2)}.mv{font-size:.72rem;font-weight:bold;color:var(--p)}
 .dg{display:grid;grid-template-columns:repeat(2,1fr);gap:8px;margin:10px 0}
@@ -67,7 +68,7 @@ h1{font-size:1.5rem;color:var(--p);text-align:center}
 </head>
 <body>
 <h1>⚽ FutPredict Pro</h1>
-<div class="sub">v18 · datos reales · métricas medidas</div>
+<div class="sub">v18.1 · datos reales · stats visibles · métricas medidas</div>
 <div class="st" id="st">⏳ Conectando...</div>
 
 <div class="tabs">
@@ -85,7 +86,7 @@ h1{font-size:1.5rem;color:var(--p);text-align:center}
   </div>
   <div class="chips" id="chips"></div>
   <div class="grid" id="grid"></div>
-  <div class="note">Poisson/Dixon-Coles sobre ratings reales. No es consejo de apuesta. +18.</div>
+  <div class="note">Poisson/Dixon-Coles sobre ratings reales. "est"=estimado del modelo. No es consejo de apuesta. +18.</div>
 </div>
 
 <div class="pane" id="pane-d">
@@ -113,6 +114,7 @@ function poisson(l,k){return(Math.pow(l,k)*Math.exp(-l))/factorial(k);}
 function fairOdds(p){return p<=0?'-':(100/p).toFixed(2);}
 function normStatus(s){s=(s||'').toUpperCase();if(s.indexOf('FIN')===0)return 'post';if(s.indexOf('IN')===0||s.indexOf('PAUS')===0||s.indexOf('HALF')===0)return 'in';if(s.indexOf('POST')===0||s.indexOf('SUSP')===0||s.indexOf('CANC')===0)return 'postp';return 'pre';}
 function markets(h,a){var o15=0,o25=0,o35=0,bt=0,sc=[];for(var x=0;x<=7;x++)for(var y=0;y<=7;y++){var p=poisson(h,x)*poisson(a,y);sc.push({h:x,a:y,p:p});if(x+y>1.5)o15+=p;if(x+y>2.5)o25+=p;if(x+y>3.5)o35+=p;if(x>0&&y>0)bt+=p;}sc.sort(function(m,n){return n.p-m.p;});return{o15:Math.round(o15*100),o25:Math.round(o25*100),o35:Math.round(o35*100),bt:Math.round(bt*100),top:sc.slice(0,3)};}
+function estStats(h,a){return{shH:cl(Math.round(h*4+4),4,26),shA:cl(Math.round(a*4+4),4,26),soH:cl(Math.round(h*1.6+1),2,12),soA:cl(Math.round(a*1.6+1),2,12),coH:cl(Math.round(h*1.5+3),2,12),coA:cl(Math.round(a*1.5+3),2,12)};}
 function fmtT(i){try{var d=new Date(i);return pad2(d.getHours())+':'+pad2(d.getMinutes());}catch(e){return '';}}
 function dateKey(i){var d=new Date(i);return d.getFullYear()+'-'+pad2(d.getMonth()+1)+'-'+pad2(d.getDate());}
 function formHTML(a){if(!a||!a.length)return '';return '<div class="frm">'+a.map(function(r){return '<span class="fd '+r+'">'+r+'</span>';}).join('')+'</div>';}
@@ -137,7 +139,7 @@ function sync(){var ch=false;ALL.forEach(function(m){var st=normStatus(m.status)
   if(st==='pre'&&!DB.preds[k]){var mk=markets(m.hL,m.aL);DB.preds[k]={id:k,home:m.home,away:m.away,league:m.league,pred:m.main,score:mk.top[0].h+'-'+mk.top[0].a,ou:((m.hL+m.aL)>2.5?'Over':'Under'),bt:(mk.bt>=50?'Sí':'No'),estado:'pend',rs:null};ch=true;}
   if(st==='post'&&m.score&&DB.preds[k]&&DB.preds[k].estado==='pend'){var p=DB.preds[k];p.rs=m.score.home+'-'+m.score.away;var real=m.score.home>m.score.away?'home':(m.score.home<m.score.away?'away':'draw');p.estado=(p.pred===real)?'win':'loss';ch=true;}
 });if(ch)save();}
-function chips(){var s={};ALL.forEach(function(m){s[m.league]=1;});var n=Object.keys(s).slice(0,12);
+function chips(){var s={};ALL.forEach(function(m){s[m.league]=1;});var n=Object.keys(s).slice(0,14);
   var h='<div class="chip '+(curL==='all'?'on':'')+'" onclick="setL(\'all\')">🌍 Todas</div>';
   n.forEach(function(x){h+='<div class="chip '+(curL===x?'on':'')+'" onclick="setL(\''+x.replace(/'/g,"\\'")+'\')">'+x+'</div>';});
   $('chips').innerHTML=h;}
@@ -146,35 +148,37 @@ function setD(v,el){curD=v;var b=document.querySelectorAll('.row .btn');for(var 
 function tkey(){if(curD==='w')return null;var d=new Date();d.setDate(d.getDate()+curD);return d.getFullYear()+'-'+pad2(d.getMonth()+1)+'-'+pad2(d.getDate());}
 function render(){var tk=tkey();var list=ALL.filter(function(m){if(curL!=='all'&&m.league!==curL)return false;if(tk&&dateKey(m.time)!==tk)return false;return true;});
   if(!list.length){$('grid').innerHTML='<div class="note">😕 Sin partidos para este filtro.</div>';return;}
-  var h='';list.forEach(function(m){var st=normStatus(m.status);var mk=markets(m.hL,m.aL);var sv=DB.preds[String(m.id)];
+  var h='';list.forEach(function(m){var st=normStatus(m.status);var mk=markets(m.hL,m.aL);var es=estStats(m.hL,m.aL);var sv=DB.preds[String(m.id)];
     var mt=m.main==='home'?'Victoria Local':(m.main==='away'?'Victoria Visitante':'Empate');
     var mp=Math.max(m.probs.home,m.probs.draw,m.probs.away);
     h+='<div class="card" onclick="openM('+m.id+')">'+
       '<div class="li"><span>'+m.league+'</span><span class="'+(st==='in'?'lv':(st==='post'?'pp':'mt'))+'">'+(st==='in'?'🔴 EN VIVO':(st==='post'?'FINAL':(st==='postp'?'POSPUESTO':'🕐 '+fmtT(m.time))))+'</span></div>'+
       '<div class="teams"><div class="tm"><div class="tn">'+m.home+'</div>'+formHTML(m.formHome)+'</div><div class="vs">'+((st==='post'&&m.score)?(m.score.home+'-'+m.score.away):'VS')+'</div><div class="tm"><div class="tn">'+m.away+'</div>'+formHTML(m.formAway)+'</div></div>';
-    if(st==='post'&&sv&&sv.rs){h+='<div class="pbox '+(sv.estado==='win'?'win':'loss')+'"><div class="ps">'+sv.rs+'</div><div class="pt">Pred: '+sv.score+' → '+(sv.estado==='win'?'✅':'❌')+'</div></div>';}
+    if(st==='post'&&sv&&sv.rs){h+='<div class="pbox '+(sv.estado==='win'?'win':'loss')+'"><div class="ps">'+sv.rs+'</div><div class="pt">Pred: '+sv.score+' → '+(sv.estado==='win'?'✅ Acertada':'❌ Fallada')+'</div></div>';}
     else if(st==='post'){h+='<div class="pbox"><div class="ps">'+(m.score?(m.score.home+'-'+m.score.away):'?')+'</div><div class="pt">Final</div></div>';}
     else{var sc=sv?sv.score:(mk.top[0].h+'-'+mk.top[0].a);
       h+='<div class="pbox"><div class="pm"><div class="ps">'+sc+'</div><div class="pt">'+mt+'<br>@'+fairOdds(mp)+'</div></div></div>'+
       '<div class="probs"><div class="pi"><div class="pl">Local</div><div class="pb"><div class="pf" data-w="'+m.probs.home+'"></div></div><div class="pv">'+m.probs.home+'%</div></div><div class="pi"><div class="pl">Empate</div><div class="pb"><div class="pf" data-w="'+m.probs.draw+'"></div></div><div class="pv">'+m.probs.draw+'%</div></div><div class="pi"><div class="pl">Visit.</div><div class="pb"><div class="pf" data-w="'+m.probs.away+'"></div></div><div class="pv">'+m.probs.away+'%</div></div></div>'+
-      '<div class="mk"><div class="mi"><div class="ml">+1.5</div><div class="mv">'+mk.o15+'%</div></div><div class="mi"><div class="ml">+2.5</div><div class="mv">'+mk.o25+'%</div></div><div class="mi"><div class="ml">+3.5</div><div class="mv">'+mk.o35+'%</div></div><div class="mi"><div class="ml">BTTS</div><div class="mv">'+mk.bt+'%</div></div></div>';}
+      '<div class="mk"><div class="mi"><div class="ml">+1.5</div><div class="mv">'+mk.o15+'%</div></div><div class="mi"><div class="ml">+2.5</div><div class="mv">'+mk.o25+'%</div></div><div class="mi"><div class="ml">+3.5</div><div class="mv">'+mk.o35+'%</div></div><div class="mi"><div class="ml">BTTS</div><div class="mv">'+mk.bt+'%</div></div></div>'+
+      '<div class="mk3"><div class="mi"><div class="ml">Tiros est</div><div class="mv">'+es.shH+'-'+es.shA+'</div></div><div class="mi"><div class="ml">A puerta est</div><div class="mv">'+es.soH+'-'+es.soA+'</div></div><div class="mi"><div class="ml">Córners est</div><div class="mv">'+es.coH+'-'+es.coA+'</div></div></div>';}
     h+='</div>';});
   $('grid').innerHTML=h;
   requestAnimationFrame(function(){var e=document.querySelectorAll('.pf');for(var i=0;i<e.length;i++)e[i].style.width=(e[i].getAttribute('data-w')||0)+'%';});
 }
-function openM(id){var m=null;for(var i=0;i<ALL.length;i++){if(ALL[i].id===id){m=ALL[i];break;}}if(!m)return;var mk=markets(m.hL,m.aL);
+function openM(id){var m=null;for(var i=0;i<ALL.length;i++){if(ALL[i].id===id){m=ALL[i];break;}}if(!m)return;var mk=markets(m.hL,m.aL);var es=estStats(m.hL,m.aL);
   var mt=m.main==='home'?'Victoria Local':(m.main==='away'?'Victoria Visitante':'Empate');
   var mp=Math.max(m.probs.home,m.probs.draw,m.probs.away);
   $('mb').innerHTML='<div class="stt" style="text-align:center;font-size:.95rem;color:var(--p)">📊 '+m.home+' vs '+m.away+'</div>'+
    '<div class="sec"><div class="stt">🔮 Predicción</div><div class="rw"><span class="rl">Marcador</span><span class="rv">'+mk.top[0].h+'-'+mk.top[0].a+'</span></div><div class="rw"><span class="rl">Resultado</span><span class="rv">'+mt+' ('+mp+'%)</span></div><div class="rw"><span class="rl">1/X/2</span><span class="rv">'+m.probs.home+'/'+m.probs.draw+'/'+m.probs.away+'</span></div><div class="rw"><span class="rl">λ</span><span class="rv">'+m.hL+' / '+m.aL+'</span></div><div class="rw"><span class="rl">Forma L/V</span><span class="rv">'+(m.formHome||[]).join('')+' / '+(m.formAway||[]).join('')+'</span></div></div>'+
-   '<div class="sec"><div class="stt">📈 Goles</div><div class="rw"><span class="rl">+1.5/+2.5/+3.5</span><span class="rv">'+mk.o15+'/'+mk.o25+'/'+mk.o35+'</span></div><div class="rw"><span class="rl">BTTS</span><span class="rv">'+mk.bt+'%</span></div><div class="rw"><span class="rl">Top</span><span class="rv">'+mk.top.map(function(s){return s.h+'-'+s.a;}).join(', ')+'</span></div></div>';
+   '<div class="sec"><div class="stt">📈 Goles</div><div class="rw"><span class="rl">+1.5/+2.5/+3.5</span><span class="rv">'+mk.o15+'/'+mk.o25+'/'+mk.o35+'</span></div><div class="rw"><span class="rl">BTTS</span><span class="rv">'+mk.bt+'%</span></div><div class="rw"><span class="rl">Top</span><span class="rv">'+mk.top.map(function(s){return s.h+'-'+s.a;}).join(', ')+'</span></div></div>'+
+   '<div class="sec"><div class="stt">📊 Stats estimadas</div><div class="rw"><span class="rl">Tiros</span><span class="rv">'+es.shH+' - '+es.shA+'</span></div><div class="rw"><span class="rl">A puerta</span><span class="rv">'+es.soH+' - '+es.soA+'</span></div><div class="rw"><span class="rl">Córners</span><span class="rv">'+es.coH+' - '+es.coA+'</span></div></div>';
   $('modal').classList.add('on');}
 function closeM(){$('modal').classList.remove('on');}
 $('modal').addEventListener('click',function(e){if(e.target.id==='modal')closeM();});
 function dash(){var p=Object.values(DB.preds);var d=p.filter(function(x){return x.estado!=='pend';});var w=d.filter(function(x){return x.estado==='win';}).length;
   $('dAcc').textContent=d.length?Math.round(w/d.length*100)+'%':'--';$('dN').textContent=p.length;$('dW').textContent=w;$('dL').textContent=d.length-w;hist();}
 function hist(){var p=Object.values(DB.preds);if(!p.length){$('hlist').innerHTML='<div class="note">📭 Sin registros.</div>';return;}
-  $('hlist').innerHTML=p.reverse().slice(0,50).map(function(x){return '<div class="hist"><div><b>'+x.home+' vs '+x.away+'</b><div style="font-size:.62rem;color:var(--t2)">Pred '+x.score+(x.rs?' · Real '+x.rs:'')+'</div></div><span class="rb '+x.estado+'">'+(x.estado==='win'?'✅':(x.estado==='loss'?'❌':'⏳'))+'</span></div>';}).join('');}
+  $('hlist').innerHTML=p.reverse().slice(0,50).map(function(x){return '<div class="hist"><div><b>'+x.home+' vs '+x.away+'</b><div style="font-size:.62rem;color:var(--t2)">Pred '+x.score+(x.rs?' · Real '+x.rs:'')+'</div></div><span class="rb '+x.estado+'">'+(x.estado==='win'?'✅':(x.estado==='loss'?'❌':''))+'</span></div>';}).join('');}
 function tab(k,el){var b=document.querySelectorAll('.tb');for(var i=0;i<b.length;i++)b[i].classList.remove('on');el.classList.add('on');
   var p=document.querySelectorAll('.pane');for(var j=0;j<p.length;j++)p[j].classList.remove('on');$('pane-'+k).classList.add('on');if(k==='d')dash();if(k==='h')hist();}
 load();
