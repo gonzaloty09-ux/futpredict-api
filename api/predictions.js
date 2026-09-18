@@ -155,7 +155,7 @@ function isUpcoming(status) {
 
 export default async function handler(req, res) {
   cors(res);
-  res.setHeader('Cache-Control', 's-maxage=300, stale-while-revalidate=600');
+  res.setHeader('Cache-Control', 's-maxage=60, stale-while-revalidate=300');
   if (req.method === 'OPTIONS') return res.status(200).end();
   const token = process.env.FOOTBALL_DATA_TOKEN;
   const oddsKey = process.env.ODDS_API_KEY || null;
@@ -191,7 +191,7 @@ export default async function handler(req, res) {
     });
     const missing = Object.keys(comps).filter(function (cid) {
       const e = HIST[cid];
-      const ttl = (e && e.ok) ? 60 * 60 * 1000 : 5 * 60 * 1000;
+      const ttl = (e && e.ok) ? 60 * 60 * 1000 : 60 * 1000;
       return !e || now - e.ts > ttl;
     });
     missing.sort(function (a, b) { return (upcomingComps[b] ? 1 : 0) - (upcomingComps[a] ? 1 : 0); });
@@ -277,4 +277,4 @@ export default async function handler(req, res) {
   } catch (e) {
     res.status(500).json({ ok: false, error: String(e.message || e) });
   }
-    }
+                                                                  }
