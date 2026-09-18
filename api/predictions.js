@@ -1,8 +1,10 @@
 const API = 'https://api.football-data.org/v4';
 const ODDS_API = 'https://api.the-odds-api.com/v4';
+const FPT = 'https://futpythontrader.com.br/api/download';
 const cache = { data: null, ts: 0, key: '' };
 const HIST = {};
 const ODDS = {};
+const STATS = {};
 const RHO = -0.06;
 const MARKET_W = 0.4;
 
@@ -30,9 +32,24 @@ function mapLeague(name) {
   if (n.indexOf('europa league') !== -1) return 'soccer_uefa_europa_league';
   if (n.indexOf('eredivisie') !== -1) return 'soccer_netherlands_eredivisie';
   if (n.indexOf('primeira liga') !== -1) return 'soccer_portugal_primeira_liga';
-  if (n.indexOf('mls') !== -1) return 'soccer_usa_mls';
   if (n.indexOf('championship') !== -1) return 'soccer_efl_champ';
   if (n.indexOf('libertadores') !== -1) return 'soccer_conmebol_libertadores';
+  return null;
+}
+// Mapeo a los CSV de FutPythonTrader (pais/liga/temporada)
+function statsSource(leagueName) {
+  const n = String(leagueName).toLowerCase();
+  if (n.indexOf('premier league') !== -1) return { c: 'england', l: 'premier-league', s: ['2026-2027', '2025-2026'] };
+  if (n.indexOf('championship') !== -1) return { c: 'england', l: 'championship', s: ['2026-2027', '2025-2026'] };
+  if (n.indexOf('primera division') !== -1 || n.indexOf('la liga') !== -1) return { c: 'spain', l: 'laliga', s: ['2026-2027', '2025-2026'] };
+  if (n.indexOf('serie a') !== -1) return { c: 'italy', l: 'serie-a', s: ['2026-2027', '2025-2026'] };
+  if (n.indexOf('bundesliga') !== -1) return { c: 'germany', l: 'bundesliga', s: ['2026-2027', '2025-2026'] };
+  if (n.indexOf('ligue 1') !== -1) return { c: 'france', l: 'ligue-1', s: ['2026-2027', '2025-2026'] };
+  if (n.indexOf('eredivisie') !== -1) return { c: 'netherlands', l: 'eredivisie', s: ['2026-2027', '2025-2026'] };
+  if (n.indexOf('primeira liga') !== -1) return { c: 'portugal', l: 'liga-portugal', s: ['2026-2027', '2025-2026'] };
+  if (n.indexOf('champions') !== -1) return { c: 'europe', l: 'champions-league', s: ['2026-2027', '2025-2026'] };
+  if (n.indexOf('europa league') !== -1) return { c: 'europe', l: 'europa-league', s: ['2026-2027', '2025-2026'] };
+  if (n.indexOf('libertadores') !== -1) return { c: 'south-america', l: 'copa-libertadores', s: ['2026', '2025'] };
   return null;
 }
 function factorial(n) { let r = 1; for (let i = 2; i <= n; i++) r *= i; return r; }
@@ -152,6 +169,50 @@ function isUpcoming(status) {
   const s = (status || '').toUpperCase();
   return s.indexOf('FIN') !== 0 && s.indexOf('POST') !== 0;
 }
+// Descarga y parsea el CSV de FutPythonTrader -> promedios por equipo (1 descarga/liga/día)
+async function fetchStats(cfg, key) {
+  for (const season of cfg.s) {
+    try {
+      const c = new AbortController(); const t = setTimeout(function () { c.abort(); }, 9000);
+      const r = await fetch(FPT + '/' + cfg.c + '/' + cfg.l + '/' + season + '?api_key=' + key, { signal: c.signal });
+      clearTimeout(t);
+      if (!r.ok) continue;
+      const text = await r.text();
+      const lines = text.trim().split(/\r?\n/);
+      if (lines.length < 2) continue;
+      const head = lines[0].split(',');
+      const idx = {}; head.forEach(function (h, i) { idx[h.trim()] = i; });
+      const need = ['Home', 'Away', 'Total_Shots_Home_FT', 'Total_Shots_Away_FT', 'Shots_On_Target_Home_FT', 'Shots_On_Target_Away_FT', 'Corners_Home_FT', 'Corners_Away_FT', 'Fouls_Home_FT', 'Fouls_Away_FT', 'Yellow_Cards_Home_FT', 'Yellow_Cards_Away_FT', 'xG_Home_FT', 'xG_Away_FT'];
+      let ok = true; need.forEach(function (n) { if (idx[n] === undefined) ok = false; });
+      if (!ok) continue;
+      const agg = {};
+      for (let i = 1; i < lines.length; i++) {
+        const col = lines[i].split(',');
+        const hn = (col[idx['Home']] || '').trim(), an = (col[idx['Away']] || '').trim();
+        if (!hn || !an) continue;
+        const num = function (k) { const v = parseFloat(col[idx[k]]); return isFinite(v) ? v : null; };
+        const add = function (team, sh, sot, cor, fou, yc, xg) {
+          if (sh == null && xg == null) return;
+          const a = agg[team] = agg[team] || { sh: 0, sot: 0, cor: 0, fou: 0, yc: 0, xg: 0, n: 0 };
+          a.sh += sh || 0; a.sot += sot || 0; a.cor += cor || 0; a.fou += fou || 0; a.yc += yc || 0; a.xg += xg || 0; a.n++;
+        };
+        add(hn, num('Total_Shots_Home_FT'), num('Shots_On_Target_Home_FT'), num('Corners_Home_FT'), num('Fouls_Home_FT'), num('Yellow_Cards_Home_FT'), num('xG_Home_FT'));
+        add(an, num('Total_Shots_Away_FT'), num('Shots_On_Target_Away_FT'), num('Corners_Away_FT'), num('Fouls_Away_FT'), num('Yellow_Cards_Away_FT'), num('xG_Away_FT'));
+      }
+      const out = {};
+      for (const k in agg) {
+        const a = agg[k];
+        if (a.n < 3) continue;
+        out[normName(k)] = {
+          sh: +(a.sh / a.n).toFixed(1), sot: +(a.sot / a.n).toFixed(1), cor: +(a.cor / a.n).toFixed(1),
+          fou: +(a.fou / a.n).toFixed(1), yc: +(a.yc / a.n).toFixed(1), xg: +(a.xg / a.n).toFixed(2), n: a.n
+        };
+      }
+      if (Object.keys(out).length) return out;
+    } catch (e) { /* prueba siguiente temporada */ }
+  }
+  return null;
+}
 
 export default async function handler(req, res) {
   cors(res);
@@ -159,6 +220,7 @@ export default async function handler(req, res) {
   if (req.method === 'OPTIONS') return res.status(200).end();
   const token = process.env.FOOTBALL_DATA_TOKEN;
   const oddsKey = process.env.ODDS_API_KEY || null;
+  const fptKey = process.env.FUTPYTHON_API_KEY || null;
   if (!token) return res.status(500).json({ ok: false, error: 'Falta FOOTBALL_DATA_TOKEN' });
   try {
     const now = Date.now();
@@ -226,7 +288,7 @@ export default async function handler(req, res) {
         score: m.score && m.score.fullTime ? { home: m.score.fullTime.home, away: m.score.fullTime.away } : null,
         probs: bp.probs, modelProbs: bp.probs, main: '', hL: +hL.toFixed(2), aL: +aL.toFixed(2), sampleN: Math.round(sampleN),
         formHome: formOf(hn), formAway: formOf(an),
-        odds: null, value: []
+        odds: null, value: [], stats: null
       });
     });
 
@@ -268,12 +330,35 @@ export default async function handler(req, res) {
       });
     }
 
+    // Stats REALES (FutPythonTrader): solo ligas con partidos próximos, max 3 descargas/día c/u cacheada 20h
+    if (fptKey) {
+      const srcs = {};
+      out.forEach(function (p) {
+        if (!isUpcoming(p.status)) return;
+        const cfg = statsSource(p.league);
+        if (cfg) srcs[p.league] = cfg;
+      });
+      const needS = Object.keys(srcs).filter(function (lg) {
+        const e = STATS[lg]; return !e || now - e.ts > 20 * 60 * 60 * 1000;
+      }).slice(0, 3);
+      for (const lg of needS) {
+        const agg = await fetchStats(srcs[lg], fptKey);
+        STATS[lg] = { agg: agg, ts: now };
+      }
+      out.forEach(function (p) {
+        const e = STATS[p.league];
+        if (!e || !e.agg) return;
+        const h = e.agg[normName(p.home)], a = e.agg[normName(p.away)];
+        if (h && a) p.stats = { home: h, away: a };
+      });
+    }
+
     out.forEach(function (p) {
       p.main = p.probs.home >= p.probs.draw && p.probs.home >= p.probs.away ? 'home'
         : p.probs.away >= p.probs.home && p.probs.away >= p.probs.draw ? 'away' : 'draw';
     });
     out.sort(function (a, b) { return (a.time || '').localeCompare(b.time || ''); });
-    res.status(200).json({ ok: true, count: out.length, window: { from, to }, oddsEnabled: !!oddsKey, predictions: out, generated: new Date().toISOString() });
+    res.status(200).json({ ok: true, count: out.length, window: { from, to }, oddsEnabled: !!oddsKey, statsEnabled: !!fptKey, predictions: out, generated: new Date().toISOString() });
   } catch (e) {
     res.status(500).json({ ok: false, error: String(e.message || e) });
   }
