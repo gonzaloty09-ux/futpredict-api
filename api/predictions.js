@@ -31,6 +31,8 @@ function mapLeague(name) {
   if (n.indexOf('eredivisie') !== -1) return 'soccer_netherlands_eredivisie';
   if (n.indexOf('primeira liga') !== -1) return 'soccer_portugal_primeira_liga';
   if (n.indexOf('mls') !== -1) return 'soccer_usa_mls';
+  if (n.indexOf('championship') !== -1) return 'soccer_efl_champ';
+  if (n.indexOf('libertadores') !== -1) return 'soccer_conmebol_libertadores';
   return null;
 }
 function factorial(n) { let r = 1; for (let i = 2; i <= n; i++) r *= i; return r; }
