@@ -77,7 +77,7 @@ export default async function handler(req, res) {
     const now = Date.now();
     const qDate = req.query.date || null;
     const base = qDate ? new Date(qDate + 'T12:00:00Z') : new Date();
-    const from = new Date(base.getTime() - 1 * 86400000).toISOString().split('T')[0];
+    const from = new Date(base.getTime() - 3 * 86400000).toISOString().split('T')[0];
     const to = new Date(base.getTime() + 6 * 86400000).toISOString().split('T')[0];
     const key = from + '_' + to;
 
