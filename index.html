@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>⚽ FutPredict Pro v18.2</title>
+<title>⚽ FutPredict Pro v18.3</title>
 <style>
 *{margin:0;padding:0;box-sizing:border-box;font-family:Arial,sans-serif}
 :root{--p:#00ff88;--s:#00d4ff;--bg:#0a0e1a;--c:rgba(255,255,255,.05);--t:#fff;--t2:#a0a0b0;--d:#ff4757;--w:#ffa502}
@@ -68,7 +68,7 @@ h1{font-size:1.5rem;color:var(--p);text-align:center}
 </head>
 <body>
 <h1>⚽ FutPredict Pro</h1>
-<div class="sub">v18.2 · datos reales + cuotas de mercado + value bets</div>
+<div class="sub">v18.3 · datos reales + cuotas + auto-refresco inteligente</div>
 <div class="st" id="st">⏳ Conectando...</div>
 
 <div class="tabs">
@@ -86,7 +86,7 @@ h1{font-size:1.5rem;color:var(--p);text-align:center}
   </div>
   <div class="chips" id="chips"></div>
   <div class="grid" id="grid"></div>
-  <div class="note">Poisson/Dixon-Coles + ratings reales + mezcla con mercado. "est"=estimado. No es consejo de apuesta. +18.</div>
+  <div class="note">Poisson/Dixon-Coles + ratings reales + mezcla con mercado. La app se refresca sola a los 20 s y 60 s. No es consejo de apuesta. +18.</div>
 </div>
 
 <div class="pane" id="pane-d">
@@ -186,6 +186,8 @@ function hist(){var p=Object.values(DB.preds);if(!p.length){$('hlist').innerHTML
 function tab(k,el){var b=document.querySelectorAll('.tb');for(var i=0;i<b.length;i++)b[i].classList.remove('on');el.classList.add('on');
   var p=document.querySelectorAll('.pane');for(var j=0;j<p.length;j++)p[j].classList.remove('on');$('pane-'+k).classList.add('on');if(k==='d')dash();if(k==='h')hist();}
 load();
+setTimeout(load,20000);
+setTimeout(load,60000);
 setInterval(load,300000);
 </script>
 </body>
