@@ -8,7 +8,16 @@
 <style>
 *{margin:0;padding:0;box-sizing:border-box;font-family:Arial,sans-serif}
 :root{--p:#00ff88;--s:#00d4ff;--bg:#0a0e1a;--card:rgba(255,255,255,.05);--t:#fff;--t2:#a0a0b0;--d:#ff4757;--w:#ffa502;--g:#ffd700}
-body.light{--bg:#f0f2f5;--card:rgba(0,0,0,.05);--t:#1a1a2e;--t2:#666}
+<script>
+setTimeout(function(){
+  var s=document.getElementById('st');
+  if(s && s.textContent.indexOf('Conectando')!==-1){
+    s.className='status err';
+    s.innerHTML='⏳ El backend tarda en arrancar. <button onclick="location.reload()" style="margin-left:6px;padding:4px 10px;border:none;border-radius:8px;background:#00ff88;color:#0a0e1a;font-weight:bold">Reintentar ahora</button>';
+  }
+},20000);
+</script>
+  body.light{--bg:#f0f2f5;--card:rgba(0,0,0,.05);--t:#1a1a2e;--t2:#666}
 body{background:linear-gradient(135deg,var(--bg),#1a1f3a);color:var(--t);min-height:100vh}
 body.light{background:linear-gradient(135deg,#f0f2f5,#e8ecf1)}
 .wrap{max-width:100%;padding:12px}
