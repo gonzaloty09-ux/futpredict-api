@@ -180,22 +180,27 @@ async function fetchStats(cfg, key) {
       if (lines.length < 2) continue;
       const head = lines[0].split(',');
       const idx = {}; head.forEach(function (h, i) { idx[h.trim().toLowerCase()] = i; });
-      // Búsqueda tolerante de columnas por patrón
       function findCol(test) { for (const k in idx) { if (test(k)) return idx[k]; } return -1; }
+      // Prefiere columnas de partido completo (_FT); si no existen, usa cualquiera
+      function pref(test) {
+        const ft = findCol(function (k) { return test(k) && k.indexOf('_ft') !== -1; });
+        if (ft !== -1) return ft;
+        return findCol(test);
+      }
       const cHome = idx['home'], cAway = idx['away'];
       if (cHome === undefined || cAway === undefined) continue;
-      const cShH = findCol(function (k) { return k.indexOf('shots') !== -1 && k.indexOf('home') !== -1 && k.indexOf('target') === -1 && k.indexOf('off') === -1; });
-      const cShA = findCol(function (k) { return k.indexOf('shots') !== -1 && k.indexOf('away') !== -1 && k.indexOf('target') === -1 && k.indexOf('off') === -1; });
-      const cSoH = findCol(function (k) { return k.indexOf('home') !== -1 && (k.indexOf('on_target') !== -1 || (k.indexOf('target') !== -1 && k.indexOf('off') === -1)); });
-      const cSoA = findCol(function (k) { return k.indexOf('away') !== -1 && (k.indexOf('on_target') !== -1 || (k.indexOf('target') !== -1 && k.indexOf('off') === -1)); });
-      const cCoH = findCol(function (k) { return k.indexOf('corner') !== -1 && k.indexOf('home') !== -1; });
-      const cCoA = findCol(function (k) { return k.indexOf('corner') !== -1 && k.indexOf('away') !== -1; });
-      const cFoH = findCol(function (k) { return k.indexOf('foul') !== -1 && k.indexOf('home') !== -1; });
-      const cFoA = findCol(function (k) { return k.indexOf('foul') !== -1 && k.indexOf('away') !== -1; });
-      const cYcH = findCol(function (k) { return k.indexOf('yellow') !== -1 && k.indexOf('home') !== -1; });
-      const cYcA = findCol(function (k) { return k.indexOf('yellow') !== -1 && k.indexOf('away') !== -1; });
-      const cXgH = findCol(function (k) { return k.indexOf('xg') !== -1 && k.indexOf('home') !== -1; });
-      const cXgA = findCol(function (k) { return k.indexOf('xg') !== -1 && k.indexOf('away') !== -1; });
+      const cShH = pref(function (k) { return k.indexOf('shots') !== -1 && k.indexOf('home') !== -1 && k.indexOf('target') === -1 && k.indexOf('off') === -1; });
+      const cShA = pref(function (k) { return k.indexOf('shots') !== -1 && k.indexOf('away') !== -1 && k.indexOf('target') === -1 && k.indexOf('off') === -1; });
+      const cSoH = pref(function (k) { return k.indexOf('home') !== -1 && (k.indexOf('on_target') !== -1 || (k.indexOf('target') !== -1 && k.indexOf('off') === -1)); });
+      const cSoA = pref(function (k) { return k.indexOf('away') !== -1 && (k.indexOf('on_target') !== -1 || (k.indexOf('target') !== -1 && k.indexOf('off') === -1)); });
+      const cCoH = pref(function (k) { return k.indexOf('corner') !== -1 && k.indexOf('home') !== -1; });
+      const cCoA = pref(function (k) { return k.indexOf('corner') !== -1 && k.indexOf('away') !== -1; });
+      const cFoH = pref(function (k) { return k.indexOf('foul') !== -1 && k.indexOf('home') !== -1; });
+      const cFoA = pref(function (k) { return k.indexOf('foul') !== -1 && k.indexOf('away') !== -1; });
+      const cYcH = pref(function (k) { return k.indexOf('yellow') !== -1 && k.indexOf('home') !== -1; });
+      const cYcA = pref(function (k) { return k.indexOf('yellow') !== -1 && k.indexOf('away') !== -1; });
+      const cXgH = pref(function (k) { return k.indexOf('xg') !== -1 && k.indexOf('home') !== -1; });
+      const cXgA = pref(function (k) { return k.indexOf('xg') !== -1 && k.indexOf('away') !== -1; });
       if (cShH === -1 && cXgH === -1) continue;
       const agg = {};
       for (let i = 1; i < lines.length; i++) {
@@ -216,7 +221,7 @@ async function fetchStats(cfg, key) {
       const out = {};
       for (const k in agg) {
         const a = agg[k];
-        if (a.n < 3) continue;
+        if (a.n < 2) continue;
         out[normName(k)] = {
           sh: +(a.sh / a.n).toFixed(1), sot: +(a.sot / a.n).toFixed(1), cor: +(a.cor / a.n).toFixed(1),
           fou: +(a.fou / a.n).toFixed(1), yc: +(a.yc / a.n).toFixed(1), xg: +(a.xg / a.n).toFixed(2), n: a.n
@@ -371,8 +376,8 @@ export default async function handler(req, res) {
         : p.probs.away >= p.probs.home && p.probs.away >= p.probs.draw ? 'away' : 'draw';
     });
     out.sort(function (a, b) { return (a.time || '').localeCompare(b.time || ''); });
-    res.status(200).json({ ok: true, count: out.length, window: { from, to }, oddsEnabled: !!oddsKey, statsEnabled: !!fptKey, predictions: out, generated: new Date().toISOString() });
+    res.status(200).json({ ok: true, parser: 'v7', count: out.length, window: { from, to }, oddsEnabled: !!oddsKey, statsEnabled: !!fptKey, predictions: out, generated: new Date().toISOString() });
   } catch (e) {
     res.status(500).json({ ok: false, error: String(e.message || e) });
   }
-      }
+    }
