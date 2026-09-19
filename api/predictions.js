@@ -121,7 +121,7 @@ function buildProbs(hL, aL, sampleN) {
   return { probs: { home: ph, draw: pd, away: pa }, top: sc.slice(0, 3) };
 }
 async function fd(path, token, ms) {
-  ms = ms || 6000;
+  ms = ms || 5000;
   const c = new AbortController(); const t = setTimeout(function () { c.abort(); }, ms);
   try {
     const r = await fetch(API + path, { headers: { 'X-Auth-Token': token }, signal: c.signal });
@@ -130,7 +130,7 @@ async function fd(path, token, ms) {
   } finally { clearTimeout(t); }
 }
 async function fetchOdds(sport, key) {
-  const c = new AbortController(); const t = setTimeout(function () { c.abort(); }, 6000);
+  const c = new AbortController(); const t = setTimeout(function () { c.abort(); }, 5000);
   try {
     const r = await fetch(ODDS_API + '/sports/' + sport + '/odds?apiKey=' + key + '&regions=eu&markets=h2h&oddsFormat=decimal', { signal: c.signal });
     if (!r.ok) throw new Error('odds ' + r.status);
@@ -164,7 +164,6 @@ function findOdds(list, fh, fa) {
   }
   return null;
 }
-// Búsqueda flexible de equipo en el agregado de stats
 function findTeam(agg, name) {
   const n = normName(name);
   if (agg[n]) return agg[n];
@@ -180,7 +179,7 @@ function isUpcoming(status) {
 async function fetchStats(cfg, key) {
   for (const season of cfg.s) {
     try {
-      const c = new AbortController(); const t = setTimeout(function () { c.abort(); }, 9000);
+      const c = new AbortController(); const t = setTimeout(function () { c.abort(); }, 7000);
       const r = await fetch(FPT + '/' + cfg.c + '/' + cfg.l + '/' + season + '?api_key=' + key, { signal: c.signal });
       clearTimeout(t);
       if (!r.ok) continue;
@@ -284,7 +283,7 @@ export default async function handler(req, res) {
       return !e || now - e.ts > ttl;
     });
     missing.sort(function (a, b) { return (upcomingComps[b] ? 1 : 0) - (upcomingComps[a] ? 1 : 0); });
-    await Promise.all(missing.slice(0, 5).map(function (cid) {
+    await Promise.all(missing.slice(0, 4).map(function (cid) {
       return fd('/competitions/' + cid + '/matches?status=FINISHED&limit=80', token)
         .then(function (h) {
           const rr = buildRatings(h.matches || [], now);
@@ -319,7 +318,8 @@ export default async function handler(req, res) {
       });
     });
 
-    if (oddsKey) {
+    let statsInfo = [];
+    async function oddsStage() {
       const sports = {};
       const upSports = {};
       out.forEach(function (p) {
@@ -356,9 +356,7 @@ export default async function handler(req, res) {
         p.value = v;
       });
     }
-
-    let statsInfo = [];
-    if (fptKey) {
+    async function csvStage() {
       const srcs = {};
       out.forEach(function (p) {
         if (!isUpcoming(p.status)) return;
@@ -367,7 +365,7 @@ export default async function handler(req, res) {
       });
       const needS = Object.keys(srcs).filter(function (lg) {
         const e = STATS[lg]; return !e || now - e.ts > 20 * 60 * 60 * 1000;
-      }).slice(0, 3);
+      }).slice(0, 1);
       for (const lg of needS) {
         const agg = await fetchStats(srcs[lg], fptKey);
         STATS[lg] = { agg: agg, ts: now };
@@ -382,10 +380,13 @@ export default async function handler(req, res) {
         return { liga: lg, equipos: STATS[lg].agg ? Object.keys(STATS[lg].agg).length : 0 };
       });
     }
+    await Promise.all([
+      oddsKey ? oddsStage() : Promise.resolve(),
+      fptKey ? csvStage() : Promise.resolve()
+    ]);
 
     out.forEach(function (p) {
       p.main = p.probs.home >= p.probs.draw && p.probs.home >= p.probs.away ? 'home'
         : p.probs.away >= p.probs.home && p.probs.away >= p.probs.draw ? 'away' : 'draw';
     });
-    out.sort(function (a, b) { return (a.time || '').localeCompare(b.time || ''); });
-    res.status(200).json({ ok: true, parser: 'v8', count: out.length
+    out.sort(function (a, b) { return (a.time || '').lo
