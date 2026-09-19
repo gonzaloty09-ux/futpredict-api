@@ -43,6 +43,15 @@ function tau(h, a, hL, aL, rho) {
   if (h === 1 && a === 1) return 1 - rho;
   return 1;
 }
+function invLambda(pOver) {
+  let best = 1.5, bd = 9;
+  for (let l = 0.4; l <= 4.6; l += 0.05) {
+    const p = 1 - poisson(l, 0) - poisson(l, 1) - poisson(l, 2);
+    const d = Math.abs(p - pOver);
+    if (d < bd) { bd = d; best = l; }
+  }
+  return best;
+}
 function buildRatings(matches, nowMs) {
   const T = {}; let sh = 0, sa = 0, sw = 0;
   matches.forEach(function (m) {
@@ -115,24 +124,31 @@ async function fd(path, token, ms) {
 async function fetchOdds(sport, key) {
   const c = new AbortController(); const t = setTimeout(function () { c.abort(); }, 5000);
   try {
-    const r = await fetch(ODDS_API + '/sports/' + sport + '/odds?apiKey=' + key + '&regions=eu&markets=h2h&oddsFormat=decimal', { signal: c.signal });
+    const r = await fetch(ODDS_API + '/sports/' + sport + '/odds?apiKey=' + key + '&regions=eu&markets=h2h,totals&oddsFormat=decimal', { signal: c.signal });
     if (!r.ok) throw new Error('odds ' + r.status);
     const data = await r.json();
     const list = [];
     (data || []).forEach(function (ev) {
-      let h = 0, d = 0, a = 0, n = 0;
+      let h = 0, d = 0, a = 0, n = 0, ov = 0, un = 0, nb = 0;
       (ev.bookmakers || []).forEach(function (bk) {
         (bk.markets || []).forEach(function (mk) {
-          if (mk.key !== 'h2h') return;
-          (mk.outcomes || []).forEach(function (oc) {
-            if (oc.name === ev.home_team) h += oc.price;
-            else if (oc.name === ev.away_team) a += oc.price;
-            else if (oc.name === 'Draw') d += oc.price;
-          });
-          n++;
+          if (mk.key === 'h2h') {
+            (mk.outcomes || []).forEach(function (oc) {
+              if (oc.name === ev.home_team) h += oc.price;
+              else if (oc.name === ev.away_team) a += oc.price;
+              else if (oc.name === 'Draw') d += oc.price;
+            });
+            n++;
+          } else if (mk.key === 'totals') {
+            let got = false;
+            (mk.outcomes || []).forEach(function (oc) {
+              if (oc.point === 2.5) { got = true; if (oc.name === 'Over') ov += oc.price; else if (oc.name === 'Under') un += oc.price; }
+            });
+            if (got) nb++;
+          }
         });
       });
-      if (n > 0 && h && d && a) list.push({ h: h / n, d: d / n, a: a / n, nh: normName(ev.home_team), na: normName(ev.away_team) });
+      if (n > 0 && h && d && a) list.push({ h: h / n, d: d / n, a: a / n, ov: nb ? ov / nb : 0, un: nb ? un / nb : 0, nh: normName(ev.home_team), na: normName(ev.away_team) });
     });
     return list;
   } finally { clearTimeout(t); }
@@ -163,15 +179,17 @@ export default async function handler(req, res) {
     const now = Date.now();
     const qDate = req.query.date || null;
     const base = qDate ? new Date(qDate + 'T12:00:00Z') : new Date();
+    const fromRest = new Date(base.getTime() - 10 * 86400000).toISOString().split('T')[0];
     const from = new Date(base.getTime() - 3 * 86400000).toISOString().split('T')[0];
     const to = new Date(base.getTime() + 6 * 86400000).toISOString().split('T')[0];
-    const key = from + '_' + to;
+    const key = fromRest + '_' + to;
+    const fromMs = new Date(from + 'T00:00:00Z').getTime();
 
     if (!cache.data || cache.key !== key || now - cache.ts > 30 * 60 * 1000) {
       const all = await Promise.all([
-        fd('/matches?dateFrom=' + from + '&dateTo=' + to, token).then(function (r) { return r.matches || []; }).catch(function () { return []; }),
-        fd('/competitions/CL/matches?dateFrom=' + from + '&dateTo=' + to, token).then(function (r) { return r.matches || []; }).catch(function () { return []; }),
-        fd('/competitions/EL/matches?dateFrom=' + from + '&dateTo=' + to, token).then(function (r) { return r.matches || []; }).catch(function () { return []; })
+        fd('/matches?dateFrom=' + fromRest + '&dateTo=' + to, token).then(function (r) { return r.matches || []; }).catch(function () { return []; }),
+        fd('/competitions/CL/matches?dateFrom=' + fromRest + '&dateTo=' + to, token).then(function (r) { return r.matches || []; }).catch(function () { return []; }),
+        fd('/competitions/EL/matches?dateFrom=' + fromRest + '&dateTo=' + to, token).then(function (r) { return r.matches || []; }).catch(function () { return []; })
       ]);
       const map = {};
       all.forEach(function (arr) { arr.forEach(function (m) { map[m.id] = m; }); });
@@ -181,6 +199,21 @@ export default async function handler(req, res) {
 
     const finished = cache.data.filter(function (m) { return !isUpcoming(m.status); });
     const FB = buildRatings(finished, now);
+    const teamFin = {};
+    finished.forEach(function (m) {
+      const t = new Date(m.utcDate).getTime();
+      (teamFin[m.homeTeam.name] = teamFin[m.homeTeam.name] || []).push(t);
+      (teamFin[m.awayTeam.name] = teamFin[m.awayTeam.name] || []).push(t);
+    });
+    for (const k in teamFin) teamFin[k].sort(function (a, b) { return a - b; });
+    function restDays(team, tMs) {
+      const arr = teamFin[team]; if (!arr) return null;
+      let last = null;
+      for (const x of arr) { if (x < tMs - 3600000) last = x; else break; }
+      if (last == null) return null;
+      return Math.round((tMs - last) / 86400000);
+    }
+    function restFactor(r) { if (r == null) return 1; if (r <= 3) return 0.94; if (r >= 8) return 1.03; return 1; }
 
     const comps = {};
     const upcomingComps = {};
@@ -205,6 +238,8 @@ export default async function handler(req, res) {
 
     const out = [];
     cache.data.forEach(function (m) {
+      const tMs = new Date(m.utcDate).getTime();
+      if (tMs < fromMs) return;
       const hn = m.homeTeam.name, an = m.awayTeam.name;
       const H = HIST[m.competition.id];
       let src = null;
@@ -214,8 +249,9 @@ export default async function handler(req, res) {
       const home = src ? (src.R[hn] || DEF) : DEF;
       const away = src ? (src.R[an] || DEF) : DEF;
       const lH = src ? src.lH : 1.35, lA = src ? src.lA : 1.15;
-      const hL = cl(lH * home.attH * away.defA, 0.25, 3.6);
-      const aL = cl(lA * away.attA * home.defH, 0.2, 3.2);
+      const rH = restDays(hn, tMs), rA = restDays(an, tMs);
+      let hL = cl(lH * home.attH * away.defA * restFactor(rH), 0.25, 3.6);
+      let aL = cl(lA * away.attA * home.defH * restFactor(rA), 0.2, 3.2);
       const sampleN = (home.n + away.n) / 2;
       const bp = buildProbs(hL, aL, sampleN);
       const formOf = function (team) { return (H && H.form && H.form[team]) ? H.form[team] : []; };
@@ -224,6 +260,7 @@ export default async function handler(req, res) {
         league: m.competition.name, time: m.utcDate, status: m.status,
         score: m.score && m.score.fullTime ? { home: m.score.fullTime.home, away: m.score.fullTime.away } : null,
         probs: bp.probs, modelProbs: bp.probs, main: '', hL: +hL.toFixed(2), aL: +aL.toFixed(2), sampleN: Math.round(sampleN),
+        restHome: rH, restAway: rA,
         formHome: formOf(hn), formAway: formOf(an),
         odds: null, value: [], stats: null
       });
@@ -249,20 +286,28 @@ export default async function handler(req, res) {
         const s = mapLeague(p.league); if (!s || !ODDS[s]) return;
         const o = findOdds(ODDS[s].list, normName(p.home), normName(p.away));
         if (!o) return;
+        if (o.ov && o.un) {
+          const pOver = (1 / o.ov) / ((1 / o.ov) + (1 / o.un));
+          const lt = invLambda(pOver);
+          const f = lt / (p.hL + p.aL);
+          if (f > 0.6 && f < 1.6) { p.hL = +(p.hL * f).toFixed(2); p.aL = +(p.aL * f).toFixed(2); }
+        }
+        const bp2 = buildProbs(p.hL, p.aL, p.sampleN);
+        p.modelProbs = bp2.probs;
         const ih = 1 / o.h, id = 1 / o.d, ia = 1 / o.a; const t = ih + id + ia;
         const mh = ih / t * 100, md = id / t * 100, ma = ia / t * 100;
         p.odds = { h: +o.h.toFixed(2), d: +o.d.toFixed(2), a: +o.a.toFixed(2) };
         p.marketProbs = { home: Math.round(mh), draw: Math.round(md), away: Math.round(ma) };
         p.probs = {
-          home: Math.round(p.modelProbs.home * (1 - MARKET_W) + mh * MARKET_W),
-          draw: Math.round(p.modelProbs.draw * (1 - MARKET_W) + md * MARKET_W),
-          away: Math.round(p.modelProbs.away * (1 - MARKET_W) + ma * MARKET_W)
+          home: Math.round(bp2.probs.home * (1 - MARKET_W) + mh * MARKET_W),
+          draw: Math.round(bp2.probs.draw * (1 - MARKET_W) + md * MARKET_W),
+          away: Math.round(bp2.probs.away * (1 - MARKET_W) + ma * MARKET_W)
         };
         if (p.probs.home + p.probs.draw + p.probs.away !== 100) p.probs.away = 100 - p.probs.home - p.probs.draw;
         const v = [];
-        if (p.modelProbs.home - mh >= 4) v.push({ side: '1', edge: Math.round(p.modelProbs.home - mh) });
-        if (p.modelProbs.draw - md >= 4) v.push({ side: 'X', edge: Math.round(p.modelProbs.draw - md) });
-        if (p.modelProbs.away - ma >= 4) v.push({ side: '2', edge: Math.round(p.modelProbs.away - ma) });
+        if (bp2.probs.home - mh >= 4) v.push({ side: '1', edge: Math.round(bp2.probs.home - mh) });
+        if (bp2.probs.draw - md >= 4) v.push({ side: 'X', edge: Math.round(bp2.probs.draw - md) });
+        if (bp2.probs.away - ma >= 4) v.push({ side: '2', edge: Math.round(bp2.probs.away - ma) });
         p.value = v;
       });
     }
@@ -272,7 +317,7 @@ export default async function handler(req, res) {
         : p.probs.away >= p.probs.home && p.probs.away >= p.probs.draw ? 'away' : 'draw';
     });
     out.sort(function (a, b) { return (a.time || '').localeCompare(b.time || ''); });
-    res.status(200).json({ ok: true, parser: 'v10', count: out.length, window: { from, to }, oddsEnabled: !!oddsKey, statsEnabled: false, predictions: out, generated: new Date().toISOString() });
+    res.status(200).json({ ok: true, parser: 'v11', count: out.length, window: { from, to }, oddsEnabled: !!oddsKey, statsEnabled: !!process.env.FUTPYTHON_API_KEY, predictions: out, generated: new Date().toISOString() });
   } catch (e) {
     res.status(500).json({ ok: false, error: String(e.message || e) });
   }
