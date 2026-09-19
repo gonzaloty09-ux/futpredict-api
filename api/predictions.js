@@ -1,10 +1,8 @@
 const API = 'https://api.football-data.org/v4';
 const ODDS_API = 'https://api.the-odds-api.com/v4';
-const FPT = 'https://futpythontrader.com.br/api/download';
 const cache = { data: null, ts: 0, key: '' };
 const HIST = {};
 const ODDS = {};
-const STATS = {};
 const RHO = -0.06;
 const MARKET_W = 0.4;
 
@@ -34,21 +32,6 @@ function mapLeague(name) {
   if (n.indexOf('primeira liga') !== -1) return 'soccer_portugal_primeira_liga';
   if (n.indexOf('championship') !== -1) return 'soccer_efl_champ';
   if (n.indexOf('libertadores') !== -1) return 'soccer_conmebol_libertadores';
-  return null;
-}
-function statsSource(leagueName) {
-  const n = String(leagueName).toLowerCase();
-  if (n.indexOf('premier league') !== -1) return { c: 'england', l: 'premier-league', s: ['2026-2027', '2025-2026'] };
-  if (n.indexOf('championship') !== -1) return { c: 'england', l: 'championship', s: ['2026-2027', '2025-2026'] };
-  if (n.indexOf('primera division') !== -1 || n.indexOf('la liga') !== -1) return { c: 'spain', l: 'laliga', s: ['2026-2027', '2025-2026'] };
-  if (n.indexOf('serie a') !== -1) return { c: 'italy', l: 'serie-a', s: ['2026-2027', '2025-2026'] };
-  if (n.indexOf('bundesliga') !== -1) return { c: 'germany', l: 'bundesliga', s: ['2026-2027', '2025-2026'] };
-  if (n.indexOf('ligue 1') !== -1) return { c: 'france', l: 'ligue-1', s: ['2026-2027', '2025-2026'] };
-  if (n.indexOf('eredivisie') !== -1) return { c: 'netherlands', l: 'eredivisie', s: ['2026-2027', '2025-2026'] };
-  if (n.indexOf('primeira liga') !== -1) return { c: 'portugal', l: 'liga-portugal', s: ['2026-2027', '2025-2026'] };
-  if (n.indexOf('champions') !== -1) return { c: 'europe', l: 'champions-league', s: ['2026-2027', '2025-2026'] };
-  if (n.indexOf('europa league') !== -1) return { c: 'europe', l: 'europa-league', s: ['2026-2027', '2025-2026'] };
-  if (n.indexOf('libertadores') !== -1) return { c: 'south-america', l: 'copa-libertadores', s: ['2026', '2025'] };
   return null;
 }
 function factorial(n) { let r = 1; for (let i = 2; i <= n; i++) r *= i; return r; }
@@ -164,80 +147,9 @@ function findOdds(list, fh, fa) {
   }
   return null;
 }
-function findTeam(agg, name) {
-  const n = normName(name);
-  if (agg[n]) return agg[n];
-  for (const k in agg) {
-    if (n.indexOf(k) !== -1 || k.indexOf(n) !== -1) return agg[k];
-  }
-  return null;
-}
 function isUpcoming(status) {
   const s = (status || '').toUpperCase();
   return s.indexOf('FIN') !== 0 && s.indexOf('POST') !== 0;
-}
-async function fetchStats(cfg, key) {
-  for (const season of cfg.s) {
-    try {
-      const c = new AbortController(); const t = setTimeout(function () { c.abort(); }, 7000);
-      const r = await fetch(FPT + '/' + cfg.c + '/' + cfg.l + '/' + season + '?api_key=' + key, { signal: c.signal });
-      clearTimeout(t);
-      if (!r.ok) continue;
-      const text = await r.text();
-      const lines = text.trim().split(/\r?\n/);
-      if (lines.length < 2) continue;
-      const head = lines[0].split(',');
-      const idx = {}; head.forEach(function (h, i) { idx[h.trim().toLowerCase()] = i; });
-      function findCol(test) { for (const k in idx) { if (test(k)) return idx[k]; } return -1; }
-      function pref(test) {
-        const ft = findCol(function (k) { return test(k) && k.indexOf('_ft') !== -1; });
-        if (ft !== -1) return ft;
-        return findCol(test);
-      }
-      const cHome = idx['home'], cAway = idx['away'];
-      if (cHome === undefined || cAway === undefined) continue;
-      const cShH = pref(function (k) { return k.indexOf('shots') !== -1 && k.indexOf('home') !== -1 && k.indexOf('target') === -1 && k.indexOf('off') === -1; });
-      const cShA = pref(function (k) { return k.indexOf('shots') !== -1 && k.indexOf('away') !== -1 && k.indexOf('target') === -1 && k.indexOf('off') === -1; });
-      const cSoH = pref(function (k) { return k.indexOf('home') !== -1 && (k.indexOf('on_target') !== -1 || (k.indexOf('target') !== -1 && k.indexOf('off') === -1)); });
-      const cSoA = pref(function (k) { return k.indexOf('away') !== -1 && (k.indexOf('on_target') !== -1 || (k.indexOf('target') !== -1 && k.indexOf('off') === -1)); });
-      const cCoH = pref(function (k) { return k.indexOf('corner') !== -1 && k.indexOf('home') !== -1; });
-      const cCoA = pref(function (k) { return k.indexOf('corner') !== -1 && k.indexOf('away') !== -1; });
-      const cFoH = pref(function (k) { return k.indexOf('foul') !== -1 && k.indexOf('home') !== -1; });
-      const cFoA = pref(function (k) { return k.indexOf('foul') !== -1 && k.indexOf('away') !== -1; });
-      const cYcH = pref(function (k) { return k.indexOf('yellow') !== -1 && k.indexOf('home') !== -1; });
-      const cYcA = pref(function (k) { return k.indexOf('yellow') !== -1 && k.indexOf('away') !== -1; });
-      const cXgH = pref(function (k) { return k.indexOf('xg') !== -1 && k.indexOf('home') !== -1; });
-      const cXgA = pref(function (k) { return k.indexOf('xg') !== -1 && k.indexOf('away') !== -1; });
-      if (cShH === -1 && cXgH === -1) continue;
-      const agg = {};
-      for (let i = 1; i < lines.length; i++) {
-        const col = lines[i].split(',');
-        const hn = (col[cHome] || '').trim(), an = (col[cAway] || '').trim();
-        if (!hn || !an) continue;
-        function num(ci) { if (ci === -1 || ci === undefined) return null; const v = parseFloat(col[ci]); return isFinite(v) ? v : null; }
-        const shH = num(cShH), shA = num(cShA), soH = num(cSoH), soA = num(cSoA), coH = num(cCoH), coA = num(cCoA),
-          foH = num(cFoH), foA = num(cFoA), ycH = num(cYcH), ycA = num(cYcA), xgH = num(cXgH), xgA = num(cXgA);
-        if (shH == null && xgH == null && shA == null && xgA == null) continue;
-        const add = function (team, sh, so, co, fo, yc, xg) {
-          const a = agg[team] = agg[team] || { sh: 0, sot: 0, cor: 0, fou: 0, yc: 0, xg: 0, n: 0 };
-          a.sh += sh || 0; a.sot += so || 0; a.cor += co || 0; a.fou += fo || 0; a.yc += yc || 0; a.xg += xg || 0; a.n++;
-        };
-        add(hn, shH, soH, coH, foH, ycH, xgH);
-        add(an, shA, soA, coA, foA, ycA, xgA);
-      }
-      const out = {};
-      for (const k in agg) {
-        const a = agg[k];
-        if (a.n < 2) continue;
-        out[normName(k)] = {
-          sh: +(a.sh / a.n).toFixed(1), sot: +(a.sot / a.n).toFixed(1), cor: +(a.cor / a.n).toFixed(1),
-          fou: +(a.fou / a.n).toFixed(1), yc: +(a.yc / a.n).toFixed(1), xg: +(a.xg / a.n).toFixed(2), n: a.n
-        };
-      }
-      if (Object.keys(out).length) return out;
-    } catch (e) { /* siguiente temporada */ }
-  }
-  return null;
 }
 
 export default async function handler(req, res) {
@@ -246,7 +158,6 @@ export default async function handler(req, res) {
   if (req.method === 'OPTIONS') return res.status(200).end();
   const token = process.env.FOOTBALL_DATA_TOKEN;
   const oddsKey = process.env.ODDS_API_KEY || null;
-  const fptKey = process.env.FUTPYTHON_API_KEY || null;
   if (!token) return res.status(500).json({ ok: false, error: 'Falta FOOTBALL_DATA_TOKEN' });
   try {
     const now = Date.now();
@@ -318,8 +229,7 @@ export default async function handler(req, res) {
       });
     });
 
-    let statsInfo = [];
-    async function oddsStage() {
+    if (oddsKey) {
       const sports = {};
       const upSports = {};
       out.forEach(function (p) {
@@ -356,37 +266,14 @@ export default async function handler(req, res) {
         p.value = v;
       });
     }
-    async function csvStage() {
-      const srcs = {};
-      out.forEach(function (p) {
-        if (!isUpcoming(p.status)) return;
-        const cfg = statsSource(p.league);
-        if (cfg) srcs[p.league] = cfg;
-      });
-      const needS = Object.keys(srcs).filter(function (lg) {
-        const e = STATS[lg]; return !e || now - e.ts > 20 * 60 * 60 * 1000;
-      }).slice(0, 1);
-      for (const lg of needS) {
-        const agg = await fetchStats(srcs[lg], fptKey);
-        STATS[lg] = { agg: agg, ts: now };
-      }
-      out.forEach(function (p) {
-        const e = STATS[p.league];
-        if (!e || !e.agg) return;
-        const h = findTeam(e.agg, p.home), a = findTeam(e.agg, p.away);
-        if (h && a) p.stats = { home: h, away: a };
-      });
-      statsInfo = Object.keys(STATS).map(function (lg) {
-        return { liga: lg, equipos: STATS[lg].agg ? Object.keys(STATS[lg].agg).length : 0 };
-      });
-    }
-    await Promise.all([
-      oddsKey ? oddsStage() : Promise.resolve(),
-      fptKey ? csvStage() : Promise.resolve()
-    ]);
 
     out.forEach(function (p) {
       p.main = p.probs.home >= p.probs.draw && p.probs.home >= p.probs.away ? 'home'
         : p.probs.away >= p.probs.home && p.probs.away >= p.probs.draw ? 'away' : 'draw';
     });
-    out.sort(function (a, b) { return (a.time || '').lo
+    out.sort(function (a, b) { return (a.time || '').localeCompare(b.time || ''); });
+    res.status(200).json({ ok: true, parser: 'v10', count: out.length, window: { from, to }, oddsEnabled: !!oddsKey, statsEnabled: false, predictions: out, generated: new Date().toISOString() });
+  } catch (e) {
+    res.status(500).json({ ok: false, error: String(e.message || e) });
+  }
+}
