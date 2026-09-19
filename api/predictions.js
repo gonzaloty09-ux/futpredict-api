@@ -3,6 +3,7 @@ const ODDS_API = 'https://api.the-odds-api.com/v4';
 const cache = { data: null, ts: 0, key: '' };
 const HIST = {};
 const ODDS = {};
+let ODDS_LEFT = null;
 const RHO = -0.06;
 const MARKET_W = 0.4;
 
@@ -125,6 +126,8 @@ async function fetchOdds(sport, key) {
   const c = new AbortController(); const t = setTimeout(function () { c.abort(); }, 5000);
   try {
     const r = await fetch(ODDS_API + '/sports/' + sport + '/odds?apiKey=' + key + '&regions=eu&markets=h2h,totals&oddsFormat=decimal', { signal: c.signal });
+    const left = r.headers.get('x-requests-remaining');
+    if (left != null && left !== '') ODDS_LEFT = Number(left);
     if (!r.ok) throw new Error('odds ' + r.status);
     const data = await r.json();
     const list = [];
@@ -245,9 +248,10 @@ export default async function handler(req, res) {
     });
     missing.sort(function (a, b) { return (upcomingComps[b] ? 1 : 0) - (upcomingComps[a] ? 1 : 0); });
     await Promise.all(missing.slice(0, 4).map(function (cid) {
-      return fd('/competitions/' + cid + '/matches?status=FINISHED&limit=80', token)
+      // Sin "limit": el orden por defecto es ascendente y limit podía traer los PRIMEROS partidos de la temporada.
+      return fd('/competitions/' + cid + '/matches?status=FINISHED', token, 6000)
         .then(function (h) {
-          const ms = h.matches || [];
+          const ms = (h.matches || []).slice().sort(function (a, b) { return (b.utcDate || '').localeCompare(a.utcDate || ''); }).slice(0, 100);
           const rr = buildRatings(ms, now);
           HIST[cid] = { R: rr.R, lH: rr.lH, lA: rr.lA, form: buildForm(ms), _matches: ms, ts: now, ok: true };
         })
@@ -285,21 +289,30 @@ export default async function handler(req, res) {
     });
 
     if (oddsKey) {
-      const sports = {};
       const upSports = {};
+      const soon = {};
       out.forEach(function (p) {
         const s = mapLeague(p.league);
-        if (s) { sports[s] = true; if (isUpcoming(p.status)) upSports[s] = true; }
+        if (s && isUpcoming(p.status)) {
+          upSports[s] = true;
+          if (new Date(p.time).getTime() - now < 36 * 3600000) soon[s] = true;
+        }
       });
-      const need = Object.keys(sports).filter(function (s) {
-        const e = ODDS[s]; return !e || now - e.ts > 30 * 60 * 1000;
+      // Solo deportes con partidos por jugarse. Cada llamada cuesta 2 créditos (h2h + totales).
+      const need = Object.keys(upSports).filter(function (s) {
+        const e = ODDS[s]; if (!e) return true;
+        const ttl = e.fail ? 3 * 60 * 1000 : (e.ttlO || (soon[s] ? 60 * 60 * 1000 : 6 * 60 * 60 * 1000));
+        return now - e.ts > ttl;
       });
-      need.sort(function (a, b) { return (upSports[b] ? 1 : 0) - (upSports[a] ? 1 : 0); });
-      await Promise.all(need.slice(0, 2).map(function (s) {
-        return fetchOdds(s, oddsKey)
-          .then(function (list) { ODDS[s] = { list: list, ts: now }; })
-          .catch(function () { ODDS[s] = { list: [], ts: now }; });
-      }));
+      need.sort(function (a, b) { return (soon[b] ? 1 : 0) - (soon[a] ? 1 : 0); });
+      const budgetOk = !(ODDS_LEFT !== null && ODDS_LEFT < 30);
+      if (budgetOk) {
+        await Promise.all(need.slice(0, 2).map(function (s) {
+          return fetchOdds(s, oddsKey)
+            .then(function (list) { ODDS[s] = list.length ? { list: list, ts: now } : { list: [], ts: now, ttlO: 30 * 60 * 1000 }; })
+            .catch(function () { const e = ODDS[s]; ODDS[s] = { list: (e && e.list) || [], ts: now, fail: true }; });
+        }));
+      }
       out.forEach(function (p) {
         const s = mapLeague(p.league); if (!s || !ODDS[s]) return;
         const o = findOdds(ODDS[s].list, normName(p.home), normName(p.away));
@@ -335,8 +348,8 @@ export default async function handler(req, res) {
         : p.probs.away >= p.probs.home && p.probs.away >= p.probs.draw ? 'away' : 'draw';
     });
     out.sort(function (a, b) { return (a.time || '').localeCompare(b.time || ''); });
-    res.status(200).json({ ok: true, parser: 'v12', count: out.length, window: { from, to }, oddsEnabled: !!oddsKey, statsEnabled: !!process.env.FUTPYTHON_API_KEY, predictions: out, generated: new Date().toISOString() });
+    res.status(200).json({ ok: true, parser: 'v13', count: out.length, window: { from, to }, oddsEnabled: !!oddsKey, oddsLeft: ODDS_LEFT, statsEnabled: !!process.env.FUTPYTHON_API_KEY, predictions: out, generated: new Date().toISOString() });
   } catch (e) {
     res.status(500).json({ ok: false, error: String(e.message || e) });
   }
-}
+            }
