@@ -179,17 +179,16 @@ export default async function handler(req, res) {
     const now = Date.now();
     const qDate = req.query.date || null;
     const base = qDate ? new Date(qDate + 'T12:00:00Z') : new Date();
-    const fromRest = new Date(base.getTime() - 10 * 86400000).toISOString().split('T')[0];
     const from = new Date(base.getTime() - 3 * 86400000).toISOString().split('T')[0];
     const to = new Date(base.getTime() + 6 * 86400000).toISOString().split('T')[0];
-    const key = fromRest + '_' + to;
+    const key = from + '_' + to;
     const fromMs = new Date(from + 'T00:00:00Z').getTime();
 
     if (!cache.data || cache.key !== key || now - cache.ts > 30 * 60 * 1000) {
       const all = await Promise.all([
-        fd('/matches?dateFrom=' + fromRest + '&dateTo=' + to, token).then(function (r) { return r.matches || []; }).catch(function () { return []; }),
-        fd('/competitions/CL/matches?dateFrom=' + fromRest + '&dateTo=' + to, token).then(function (r) { return r.matches || []; }).catch(function () { return []; }),
-        fd('/competitions/EL/matches?dateFrom=' + fromRest + '&dateTo=' + to, token).then(function (r) { return r.matches || []; }).catch(function () { return []; })
+        fd('/matches?dateFrom=' + from + '&dateTo=' + to, token).then(function (r) { return r.matches || []; }).catch(function () { return []; }),
+        fd('/competitions/CL/matches?dateFrom=' + from + '&dateTo=' + to, token).then(function (r) { return r.matches || []; }).catch(function () { return []; }),
+        fd('/competitions/EL/matches?dateFrom=' + from + '&dateTo=' + to, token).then(function (r) { return r.matches || []; }).catch(function () { return []; })
       ]);
       const map = {};
       all.forEach(function (arr) { arr.forEach(function (m) { map[m.id] = m; }); });
@@ -197,15 +196,33 @@ export default async function handler(req, res) {
       if (arr2.length) { cache.data = arr2; cache.ts = now; cache.key = key; }
     }
 
+    if (!cache.data || !cache.data.length) {
+      return res.status(200).json({ ok: true, count: 0, window: { from, to }, oddsEnabled: !!oddsKey, statsEnabled: !!process.env.FUTPYTHON_API_KEY, predictions: [], generated: new Date().toISOString(), note: 'cargando, volvé a abrir en unos segundos' });
+    }
+
     const finished = cache.data.filter(function (m) { return !isUpcoming(m.status); });
     const FB = buildRatings(finished, now);
-    const teamFin = {};
-    finished.forEach(function (m) {
-      const t = new Date(m.utcDate).getTime();
-      (teamFin[m.homeTeam.name] = teamFin[m.homeTeam.name] || []).push(t);
-      (teamFin[m.awayTeam.name] = teamFin[m.awayTeam.name] || []).push(t);
-    });
-    for (const k in teamFin) teamFin[k].sort(function (a, b) { return a - b; });
+
+    function buildTeamFin() {
+      const tf = {};
+      finished.forEach(function (m) {
+        const t = new Date(m.utcDate).getTime();
+        (tf[m.homeTeam.name] = tf[m.homeTeam.name] || []).push(t);
+        (tf[m.awayTeam.name] = tf[m.awayTeam.name] || []).push(t);
+      });
+      for (const cid in HIST) {
+        const H = HIST[cid];
+        if (!H || !H.ok || !H._matches) continue;
+        H._matches.forEach(function (m) {
+          const t = new Date(m.utcDate).getTime();
+          (tf[m.homeTeam.name] = tf[m.homeTeam.name] || []).push(t);
+          (tf[m.awayTeam.name] = tf[m.awayTeam.name] || []).push(t);
+        });
+      }
+      for (const k in tf) tf[k].sort(function (a, b) { return a - b; });
+      return tf;
+    }
+    const teamFin = buildTeamFin();
     function restDays(team, tMs) {
       const arr = teamFin[team]; if (!arr) return null;
       let last = null;
@@ -230,8 +247,9 @@ export default async function handler(req, res) {
     await Promise.all(missing.slice(0, 4).map(function (cid) {
       return fd('/competitions/' + cid + '/matches?status=FINISHED&limit=80', token)
         .then(function (h) {
-          const rr = buildRatings(h.matches || [], now);
-          HIST[cid] = { R: rr.R, lH: rr.lH, lA: rr.lA, form: buildForm(h.matches || []), ts: now, ok: true };
+          const ms = h.matches || [];
+          const rr = buildRatings(ms, now);
+          HIST[cid] = { R: rr.R, lH: rr.lH, lA: rr.lA, form: buildForm(ms), _matches: ms, ts: now, ok: true };
         })
         .catch(function () { HIST[cid] = { R: {}, lH: 1.35, lA: 1.15, form: {}, ts: now, ok: false }; });
     }));
@@ -250,8 +268,8 @@ export default async function handler(req, res) {
       const away = src ? (src.R[an] || DEF) : DEF;
       const lH = src ? src.lH : 1.35, lA = src ? src.lA : 1.15;
       const rH = restDays(hn, tMs), rA = restDays(an, tMs);
-      let hL = cl(lH * home.attH * away.defA * restFactor(rH), 0.25, 3.6);
-      let aL = cl(lA * away.attA * home.defH * restFactor(rA), 0.2, 3.2);
+      const hL = cl(lH * home.attH * away.defA * restFactor(rH), 0.25, 3.6);
+      const aL = cl(lA * away.attA * home.defH * restFactor(rA), 0.2, 3.2);
       const sampleN = (home.n + away.n) / 2;
       const bp = buildProbs(hL, aL, sampleN);
       const formOf = function (team) { return (H && H.form && H.form[team]) ? H.form[team] : []; };
@@ -317,7 +335,7 @@ export default async function handler(req, res) {
         : p.probs.away >= p.probs.home && p.probs.away >= p.probs.draw ? 'away' : 'draw';
     });
     out.sort(function (a, b) { return (a.time || '').localeCompare(b.time || ''); });
-    res.status(200).json({ ok: true, parser: 'v11', count: out.length, window: { from, to }, oddsEnabled: !!oddsKey, statsEnabled: !!process.env.FUTPYTHON_API_KEY, predictions: out, generated: new Date().toISOString() });
+    res.status(200).json({ ok: true, parser: 'v12', count: out.length, window: { from, to }, oddsEnabled: !!oddsKey, statsEnabled: !!process.env.FUTPYTHON_API_KEY, predictions: out, generated: new Date().toISOString() });
   } catch (e) {
     res.status(500).json({ ok: false, error: String(e.message || e) });
   }
