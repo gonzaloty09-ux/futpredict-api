@@ -1,9 +1,63 @@
 const API = 'https://api.football-data.org/v4';
 const ODDS_API = 'https://api.the-odds-api.com/v4';
 const cache = { data: null, ts: 0, key: '' };
+let FD_ERRS = [];
 const HIST = {};
 const ODDS = {};
 let ODDS_LEFT = null;
+let ODDS_LEFT_TS = 0;
+let KV_READY = false;
+let KV_LOADED = 0;
+let KV_ERR = null;
+
+async function dbq(sql, params, ms) {
+  const cs = process.env.DATABASE_URL || process.env.POSTGRES_URL;
+  if (!cs) throw new Error('sin DATABASE_URL');
+  const host = new URL(cs).hostname;
+  const c = new AbortController(); const t = setTimeout(function () { c.abort(); }, ms || 2500);
+  try {
+    const r = await fetch('https://' + host + '/sql', { method: 'POST', headers: { 'Content-Type': 'application/json', 'Neon-Connection-String': cs }, body: JSON.stringify({ query: sql, params: params || [] }), signal: c.signal });
+    const j = await r.json();
+    if (!r.ok) throw new Error(j.message || ('neon ' + r.status));
+    return j.rows || [];
+  } finally { clearTimeout(t); }
+}
+function slimMatches(ms) {
+  return ms.map(function (m) {
+    const ft = m.score && m.score.fullTime ? { home: m.score.fullTime.home, away: m.score.fullTime.away } : { home: null, away: null };
+    return { utcDate: m.utcDate, homeTeam: { name: m.homeTeam.name }, awayTeam: { name: m.awayTeam.name }, score: { fullTime: ft } };
+  });
+}
+function mkHist(ms, ts, now) {
+  const rr = buildRatings(ms, now);
+  return { R: rr.R, lH: rr.lH, lA: rr.lA, form: buildForm(ms), _matches: ms, ts: ts, ok: true, count: ms.length };
+}
+async function kvSave(k, v) {
+  try { await dbq('insert into kv (k, v, ts) values ($1, $2::jsonb, now()) on conflict (k) do update set v = excluded.v, ts = now()', [k, JSON.stringify(v)], 3000); } catch (e) { KV_ERR = String((e && e.message) || e); }
+}
+// Caché compartida entre instancias (historial y cuotas). Es opcional: si falla, todo sigue como antes.
+async function kvLoad(now) {
+  if (now - KV_LOADED < 60000) return;
+  KV_LOADED = now;
+  try {
+    if (!KV_READY) { await dbq('create table if not exists kv (k text primary key, v jsonb, ts timestamptz default now())'); KV_READY = true; }
+    const rows = await dbq('select k, v, (extract(epoch from ts) * 1000)::float8 as ms from kv');
+    KV_ERR = null;
+    rows.forEach(function (r) {
+      let v = r.v; if (typeof v === 'string') { try { v = JSON.parse(v); } catch (e) { return; } }
+      const ms = Number(r.ms);
+      if (r.k.indexOf('h:') === 0 && v && v.matches) {
+        const cid = r.k.slice(2);
+        if (!HIST[cid] || !HIST[cid].ok || HIST[cid].ts < ms) HIST[cid] = mkHist(v.matches, ms, now);
+      } else if (r.k.indexOf('o:') === 0 && v && v.list) {
+        const sp = r.k.slice(2);
+        if (!ODDS[sp] || ODDS[sp].ts < ms) ODDS[sp] = { list: v.list, ts: ms };
+      } else if (r.k === 'm:left' && v && v.left != null && ms > ODDS_LEFT_TS) {
+        ODDS_LEFT = Number(v.left); ODDS_LEFT_TS = ms;
+      }
+    });
+  } catch (e) { KV_ERR = String((e && e.message) || e); }
+}
 const RHO = -0.06;
 const MARKET_W = 0.4;
 
@@ -127,7 +181,7 @@ async function fetchOdds(sport, key) {
   try {
     const r = await fetch(ODDS_API + '/sports/' + sport + '/odds?apiKey=' + key + '&regions=eu&markets=h2h,totals&oddsFormat=decimal', { signal: c.signal });
     const left = r.headers.get('x-requests-remaining');
-    if (left != null && left !== '') ODDS_LEFT = Number(left);
+    if (left != null && left !== '') { ODDS_LEFT = Number(left); ODDS_LEFT_TS = Date.now(); }
     if (!r.ok) throw new Error('odds ' + r.status);
     const data = await r.json();
     const list = [];
@@ -188,10 +242,12 @@ export default async function handler(req, res) {
     const fromMs = new Date(from + 'T00:00:00Z').getTime();
 
     if (!cache.data || cache.key !== key || now - cache.ts > 30 * 60 * 1000) {
+      FD_ERRS = [];
+      const grab = function (label) { return function (e) { FD_ERRS.push(label + ': ' + String((e && e.message) || e)); return []; }; };
       const all = await Promise.all([
-        fd('/matches?dateFrom=' + from + '&dateTo=' + to, token).then(function (r) { return r.matches || []; }).catch(function () { return []; }),
-        fd('/competitions/CL/matches?dateFrom=' + from + '&dateTo=' + to, token).then(function (r) { return r.matches || []; }).catch(function () { return []; }),
-        fd('/competitions/EL/matches?dateFrom=' + from + '&dateTo=' + to, token).then(function (r) { return r.matches || []; }).catch(function () { return []; })
+        fd('/matches?dateFrom=' + from + '&dateTo=' + to, token).then(function (r) { return r.matches || []; }).catch(grab('matches')),
+        fd('/competitions/CL/matches?dateFrom=' + from + '&dateTo=' + to, token).then(function (r) { return r.matches || []; }).catch(grab('CL')),
+        fd('/competitions/EL/matches?dateFrom=' + from + '&dateTo=' + to, token).then(function (r) { return r.matches || []; }).catch(grab('EL'))
       ]);
       const map = {};
       all.forEach(function (arr) { arr.forEach(function (m) { map[m.id] = m; }); });
@@ -200,7 +256,7 @@ export default async function handler(req, res) {
     }
 
     if (!cache.data || !cache.data.length) {
-      return res.status(200).json({ ok: true, count: 0, window: { from, to }, oddsEnabled: !!oddsKey, statsEnabled: !!process.env.FUTPYTHON_API_KEY, predictions: [], generated: new Date().toISOString(), note: 'cargando, volvé a abrir en unos segundos' });
+      return res.status(200).json({ ok: true, count: 0, window: { from, to }, oddsEnabled: !!oddsKey, statsEnabled: !!process.env.FUTPYTHON_API_KEY, predictions: [], generated: new Date().toISOString(), errors: FD_ERRS, note: 'cargando, volvé a abrir en unos segundos' });
     }
 
     const finished = cache.data.filter(function (m) { return !isUpcoming(m.status); });
@@ -241,19 +297,27 @@ export default async function handler(req, res) {
       comps[m.competition.id] = true;
       if (isUpcoming(m.status)) upcomingComps[m.competition.id] = true;
     });
+    await kvLoad(now);
+    const upCount = {};
+    cache.data.forEach(function (m) { if (isUpcoming(m.status)) upCount[m.competition.id] = (upCount[m.competition.id] || 0) + 1; });
     const missing = Object.keys(comps).filter(function (cid) {
       const e = HIST[cid];
-      const ttl = (e && e.ok) ? 60 * 60 * 1000 : 60 * 1000;
+      const ttl = (e && e.ok) ? 3 * 60 * 60 * 1000 : 60 * 1000;
       return !e || now - e.ts > ttl;
     });
-    missing.sort(function (a, b) { return (upcomingComps[b] ? 1 : 0) - (upcomingComps[a] ? 1 : 0); });
+    // Primero las ligas nunca consultadas, y entre ellas las que más partidos próximos tienen (la Premier no puede quedar al final).
+    missing.sort(function (a, b) {
+      const ea = HIST[a] ? 1 : 0, eb = HIST[b] ? 1 : 0;
+      if (ea !== eb) return ea - eb;
+      return (upCount[b] || 0) - (upCount[a] || 0);
+    });
     await Promise.all(missing.slice(0, 4).map(function (cid) {
       // Sin "limit": el orden por defecto es ascendente y limit podía traer los PRIMEROS partidos de la temporada.
       return fd('/competitions/' + cid + '/matches?status=FINISHED', token, 6000)
         .then(function (h) {
-          const ms = (h.matches || []).slice().sort(function (a, b) { return (b.utcDate || '').localeCompare(a.utcDate || ''); }).slice(0, 100);
-          const rr = buildRatings(ms, now);
-          HIST[cid] = { R: rr.R, lH: rr.lH, lA: rr.lA, form: buildForm(ms), _matches: ms, ts: now, ok: true, count: ms.length };
+          const ms = slimMatches((h.matches || []).slice().sort(function (a, b) { return (b.utcDate || '').localeCompare(a.utcDate || ''); }).slice(0, 100));
+          HIST[cid] = mkHist(ms, now, now);
+          return kvSave('h:' + cid, { matches: ms });
         })
         .catch(function (e) { HIST[cid] = { R: {}, lH: 1.35, lA: 1.15, form: {}, ts: now, ok: false, err: String((e && e.message) || e) }; });
     }));
@@ -291,25 +355,29 @@ export default async function handler(req, res) {
     if (oddsKey) {
       const upSports = {};
       const soon = {};
+      const soonN = {};
       out.forEach(function (p) {
         const s = mapLeague(p.league);
         if (s && isUpcoming(p.status)) {
           upSports[s] = true;
-          if (new Date(p.time).getTime() - now < 36 * 3600000) soon[s] = true;
+          if (new Date(p.time).getTime() - now < 36 * 3600000) { soon[s] = true; soonN[s] = (soonN[s] || 0) + 1; }
         }
       });
       // Solo deportes con partidos por jugarse. Cada llamada cuesta 2 créditos (h2h + totales).
       const need = Object.keys(upSports).filter(function (s) {
         const e = ODDS[s]; if (!e) return true;
-        const ttl = e.fail ? 3 * 60 * 1000 : (e.ttlO || (soon[s] ? 60 * 60 * 1000 : 6 * 60 * 60 * 1000));
+        const ttl = e.fail ? 3 * 60 * 1000 : (e.ttlO || (soon[s] ? 8 * 60 * 60 * 1000 : 24 * 60 * 60 * 1000));
         return now - e.ts > ttl;
       });
-      need.sort(function (a, b) { return (soon[b] ? 1 : 0) - (soon[a] ? 1 : 0); });
-      const budgetOk = !(ODDS_LEFT !== null && ODDS_LEFT < 30);
+      need.sort(function (a, b) { return (soonN[b] || 0) - (soonN[a] || 0); });
+      const budgetOk = ODDS_LEFT === null || ODDS_LEFT >= 60 || (now - ODDS_LEFT_TS > 24 * 60 * 60 * 1000);
       if (budgetOk) {
         await Promise.all(need.slice(0, 2).map(function (s) {
           return fetchOdds(s, oddsKey)
-            .then(function (list) { ODDS[s] = list.length ? { list: list, ts: now } : { list: [], ts: now, ttlO: 30 * 60 * 1000 }; })
+            .then(function (list) {
+              ODDS[s] = list.length ? { list: list, ts: now } : { list: [], ts: now, ttlO: 30 * 60 * 1000 };
+              if (list.length) return Promise.all([kvSave('o:' + s, { list: list }), kvSave('m:left', { left: ODDS_LEFT })]);
+            })
             .catch(function () { const e = ODDS[s]; ODDS[s] = { list: (e && e.list) || [], ts: now, fail: true }; });
         }));
       }
@@ -358,9 +426,8 @@ export default async function handler(req, res) {
       const e = HIST[cid];
       histInfo[compName[cid] || cid] = e ? (e.ok ? { ok: true, partidos: e.count } : { ok: false, err: e.err || 'sin datos' }) : { ok: false, err: 'aun no consultado' };
     }
-    res.status(200).json({ ok: true, parser: 'v13.1', hist: histInfo, count: out.length, window: { from, to }, oddsEnabled: !!oddsKey, oddsLeft: ODDS_LEFT, statsEnabled: !!process.env.FUTPYTHON_API_KEY, predictions: out, generated: new Date().toISOString() });
+    res.status(200).json({ ok: true, parser: 'v14', hist: histInfo, kv: KV_ERR || 'ok', count: out.length, window: { from, to }, oddsEnabled: !!oddsKey, oddsLeft: ODDS_LEFT, statsEnabled: !!process.env.FUTPYTHON_API_KEY, predictions: out, generated: new Date().toISOString() });
   } catch (e) {
     res.status(500).json({ ok: false, error: String(e.message || e) });
   }
-                 }
-              
+}
