@@ -253,9 +253,9 @@ export default async function handler(req, res) {
         .then(function (h) {
           const ms = (h.matches || []).slice().sort(function (a, b) { return (b.utcDate || '').localeCompare(a.utcDate || ''); }).slice(0, 100);
           const rr = buildRatings(ms, now);
-          HIST[cid] = { R: rr.R, lH: rr.lH, lA: rr.lA, form: buildForm(ms), _matches: ms, ts: now, ok: true };
+          HIST[cid] = { R: rr.R, lH: rr.lH, lA: rr.lA, form: buildForm(ms), _matches: ms, ts: now, ok: true, count: ms.length };
         })
-        .catch(function () { HIST[cid] = { R: {}, lH: 1.35, lA: 1.15, form: {}, ts: now, ok: false }; });
+        .catch(function (e) { HIST[cid] = { R: {}, lH: 1.35, lA: 1.15, form: {}, ts: now, ok: false, err: String((e && e.message) || e) }; });
     }));
 
     const out = [];
@@ -336,9 +336,12 @@ export default async function handler(req, res) {
         };
         if (p.probs.home + p.probs.draw + p.probs.away !== 100) p.probs.away = 100 - p.probs.home - p.probs.draw;
         const v = [];
-        if (bp2.probs.home - mh >= 4) v.push({ side: '1', edge: Math.round(bp2.probs.home - mh) });
-        if (bp2.probs.draw - md >= 4) v.push({ side: 'X', edge: Math.round(bp2.probs.draw - md) });
-        if (bp2.probs.away - ma >= 4) v.push({ side: '2', edge: Math.round(bp2.probs.away - ma) });
+        // Con muestra chica el modelo no sabe nada del equipo: una "ventaja" sería solo ignorancia, no value.
+        if (p.sampleN >= 4) {
+          if (bp2.probs.home - mh >= 4) v.push({ side: '1', edge: Math.round(bp2.probs.home - mh) });
+          if (bp2.probs.draw - md >= 4) v.push({ side: 'X', edge: Math.round(bp2.probs.draw - md) });
+          if (bp2.probs.away - ma >= 4) v.push({ side: '2', edge: Math.round(bp2.probs.away - ma) });
+        }
         p.value = v;
       });
     }
@@ -348,8 +351,16 @@ export default async function handler(req, res) {
         : p.probs.away >= p.probs.home && p.probs.away >= p.probs.draw ? 'away' : 'draw';
     });
     out.sort(function (a, b) { return (a.time || '').localeCompare(b.time || ''); });
-    res.status(200).json({ ok: true, parser: 'v13', count: out.length, window: { from, to }, oddsEnabled: !!oddsKey, oddsLeft: ODDS_LEFT, statsEnabled: !!process.env.FUTPYTHON_API_KEY, predictions: out, generated: new Date().toISOString() });
+    const compName = {};
+    cache.data.forEach(function (m) { compName[m.competition.id] = m.competition.name; });
+    const histInfo = {};
+    for (const cid in comps) {
+      const e = HIST[cid];
+      histInfo[compName[cid] || cid] = e ? (e.ok ? { ok: true, partidos: e.count } : { ok: false, err: e.err || 'sin datos' }) : { ok: false, err: 'aun no consultado' };
+    }
+    res.status(200).json({ ok: true, parser: 'v13.1', hist: histInfo, count: out.length, window: { from, to }, oddsEnabled: !!oddsKey, oddsLeft: ODDS_LEFT, statsEnabled: !!process.env.FUTPYTHON_API_KEY, predictions: out, generated: new Date().toISOString() });
   } catch (e) {
     res.status(500).json({ ok: false, error: String(e.message || e) });
   }
-            }
+                 }
+              
