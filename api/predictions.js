@@ -36,7 +36,6 @@ function mapLeague(name) {
   if (n.indexOf('libertadores') !== -1) return 'soccer_conmebol_libertadores';
   return null;
 }
-// Mapeo a los CSV de FutPythonTrader (pais/liga/temporada)
 function statsSource(leagueName) {
   const n = String(leagueName).toLowerCase();
   if (n.indexOf('premier league') !== -1) return { c: 'england', l: 'premier-league', s: ['2026-2027', '2025-2026'] };
@@ -169,7 +168,6 @@ function isUpcoming(status) {
   const s = (status || '').toUpperCase();
   return s.indexOf('FIN') !== 0 && s.indexOf('POST') !== 0;
 }
-// Descarga y parsea el CSV de FutPythonTrader -> promedios por equipo (1 descarga/liga/día)
 async function fetchStats(cfg, key) {
   for (const season of cfg.s) {
     try {
@@ -181,23 +179,39 @@ async function fetchStats(cfg, key) {
       const lines = text.trim().split(/\r?\n/);
       if (lines.length < 2) continue;
       const head = lines[0].split(',');
-      const idx = {}; head.forEach(function (h, i) { idx[h.trim()] = i; });
-      const need = ['Home', 'Away', 'Total_Shots_Home_FT', 'Total_Shots_Away_FT', 'Shots_On_Target_Home_FT', 'Shots_On_Target_Away_FT', 'Corners_Home_FT', 'Corners_Away_FT', 'Fouls_Home_FT', 'Fouls_Away_FT', 'Yellow_Cards_Home_FT', 'Yellow_Cards_Away_FT', 'xG_Home_FT', 'xG_Away_FT'];
-      let ok = true; need.forEach(function (n) { if (idx[n] === undefined) ok = false; });
-      if (!ok) continue;
+      const idx = {}; head.forEach(function (h, i) { idx[h.trim().toLowerCase()] = i; });
+      // Búsqueda tolerante de columnas por patrón
+      function findCol(test) { for (const k in idx) { if (test(k)) return idx[k]; } return -1; }
+      const cHome = idx['home'], cAway = idx['away'];
+      if (cHome === undefined || cAway === undefined) continue;
+      const cShH = findCol(function (k) { return k.indexOf('shots') !== -1 && k.indexOf('home') !== -1 && k.indexOf('target') === -1 && k.indexOf('off') === -1; });
+      const cShA = findCol(function (k) { return k.indexOf('shots') !== -1 && k.indexOf('away') !== -1 && k.indexOf('target') === -1 && k.indexOf('off') === -1; });
+      const cSoH = findCol(function (k) { return k.indexOf('home') !== -1 && (k.indexOf('on_target') !== -1 || (k.indexOf('target') !== -1 && k.indexOf('off') === -1)); });
+      const cSoA = findCol(function (k) { return k.indexOf('away') !== -1 && (k.indexOf('on_target') !== -1 || (k.indexOf('target') !== -1 && k.indexOf('off') === -1)); });
+      const cCoH = findCol(function (k) { return k.indexOf('corner') !== -1 && k.indexOf('home') !== -1; });
+      const cCoA = findCol(function (k) { return k.indexOf('corner') !== -1 && k.indexOf('away') !== -1; });
+      const cFoH = findCol(function (k) { return k.indexOf('foul') !== -1 && k.indexOf('home') !== -1; });
+      const cFoA = findCol(function (k) { return k.indexOf('foul') !== -1 && k.indexOf('away') !== -1; });
+      const cYcH = findCol(function (k) { return k.indexOf('yellow') !== -1 && k.indexOf('home') !== -1; });
+      const cYcA = findCol(function (k) { return k.indexOf('yellow') !== -1 && k.indexOf('away') !== -1; });
+      const cXgH = findCol(function (k) { return k.indexOf('xg') !== -1 && k.indexOf('home') !== -1; });
+      const cXgA = findCol(function (k) { return k.indexOf('xg') !== -1 && k.indexOf('away') !== -1; });
+      if (cShH === -1 && cXgH === -1) continue;
       const agg = {};
       for (let i = 1; i < lines.length; i++) {
         const col = lines[i].split(',');
-        const hn = (col[idx['Home']] || '').trim(), an = (col[idx['Away']] || '').trim();
+        const hn = (col[cHome] || '').trim(), an = (col[cAway] || '').trim();
         if (!hn || !an) continue;
-        const num = function (k) { const v = parseFloat(col[idx[k]]); return isFinite(v) ? v : null; };
-        const add = function (team, sh, sot, cor, fou, yc, xg) {
-          if (sh == null && xg == null) return;
+        function num(ci) { if (ci === -1 || ci === undefined) return null; const v = parseFloat(col[ci]); return isFinite(v) ? v : null; }
+        const shH = num(cShH), shA = num(cShA), soH = num(cSoH), soA = num(cSoA), coH = num(cCoH), coA = num(cCoA),
+          foH = num(cFoH), foA = num(cFoA), ycH = num(cYcH), ycA = num(cYcA), xgH = num(cXgH), xgA = num(cXgA);
+        if (shH == null && xgH == null && shA == null && xgA == null) continue;
+        const add = function (team, sh, so, co, fo, yc, xg) {
           const a = agg[team] = agg[team] || { sh: 0, sot: 0, cor: 0, fou: 0, yc: 0, xg: 0, n: 0 };
-          a.sh += sh || 0; a.sot += sot || 0; a.cor += cor || 0; a.fou += fou || 0; a.yc += yc || 0; a.xg += xg || 0; a.n++;
+          a.sh += sh || 0; a.sot += so || 0; a.cor += co || 0; a.fou += fo || 0; a.yc += yc || 0; a.xg += xg || 0; a.n++;
         };
-        add(hn, num('Total_Shots_Home_FT'), num('Shots_On_Target_Home_FT'), num('Corners_Home_FT'), num('Fouls_Home_FT'), num('Yellow_Cards_Home_FT'), num('xG_Home_FT'));
-        add(an, num('Total_Shots_Away_FT'), num('Shots_On_Target_Away_FT'), num('Corners_Away_FT'), num('Fouls_Away_FT'), num('Yellow_Cards_Away_FT'), num('xG_Away_FT'));
+        add(hn, shH, soH, coH, foH, ycH, xgH);
+        add(an, shA, soA, coA, foA, ycA, xgA);
       }
       const out = {};
       for (const k in agg) {
@@ -209,7 +223,7 @@ async function fetchStats(cfg, key) {
         };
       }
       if (Object.keys(out).length) return out;
-    } catch (e) { /* prueba siguiente temporada */ }
+    } catch (e) { /* siguiente temporada */ }
   }
   return null;
 }
@@ -330,7 +344,6 @@ export default async function handler(req, res) {
       });
     }
 
-    // Stats REALES (FutPythonTrader): solo ligas con partidos próximos, max 3 descargas/día c/u cacheada 20h
     if (fptKey) {
       const srcs = {};
       out.forEach(function (p) {
