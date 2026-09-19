@@ -208,4 +208,13 @@ $('modal').addEventListener('click',function(e){if(e.target.id==='modal')closeM(
 function dash(){var p=Object.values(DB.preds);var d=p.filter(function(x){return x.estado!=='pend';});var w=d.filter(function(x){return x.estado==='win';}).length;
   $('dAcc').textContent=d.length?Math.round(w/d.length*100)+'%':'--';$('dN').textContent=p.length;$('dW').textContent=w;$('dL').textContent=d.length-w;hist();}
 function hist(){var p=Object.values(DB.preds);if(!p.length){$('hlist').innerHTML='<div class="note">📭 Sin registros.</div>';return;}
-  $('hlist').innerHTML=p.reverse().slice(0,50).map(function(x){return '<div class="hist"><div><b>'+x.home+' vs '+x.away+'</b><div style="font-size:.62rem;color:var(--t2)">Pred '+x.score+(x.rs?' · Real '+x.rs:'')+'
+  $('hlist').innerHTML=p.reverse().slice(0,50).map(function(x){return '<div class="hist"><div><b>'+x.home+' vs '+x.away+'</b><div style="font-size:.62rem;color:var(--t2)">Pred '+x.score+(x.rs?' · Real '+x.rs:'')+'</div></div><span class="rb '+x.estado+'">'+(x.estado==='win'?'✅':(x.estado==='loss'?'❌':''))+'</span></div>';}).join('');}
+function tab(k,el){var b=document.querySelectorAll('.tb');for(var i=0;i<b.length;i++)b[i].classList.remove('on');el.classList.add('on');
+  var p=document.querySelectorAll('.pane');for(var j=0;j<p.length;j++)p[j].classList.remove('on');$('pane-'+k).classList.add('on');if(k==='d')dash();if(k==='h')hist();}
+load();
+setTimeout(load,20000);
+setTimeout(load,60000);
+setInterval(load,300000);
+</script>
+</body>
+</html>
