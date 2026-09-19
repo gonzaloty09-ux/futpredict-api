@@ -5,7 +5,7 @@
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <meta name="theme-color" content="#00ff88">
 <link rel="manifest" href="/manifest.webmanifest">
-<title>⚽ FutPredict Pro v20</title>
+<title>⚽ FutPredict Pro v21</title>
 <style>
 *{margin:0;padding:0;box-sizing:border-box;font-family:Arial,sans-serif}
 :root{--p:#00ff88;--s:#00d4ff;--bg:#0a0e1a;--c:rgba(255,255,255,.05);--t:#fff;--t2:#a0a0b0;--d:#ff4757;--w:#ffa502}
@@ -71,7 +71,7 @@ h1{font-size:1.5rem;color:var(--p);text-align:center}
 </head>
 <body>
 <h1>⚽ FutPredict Pro</h1>
-<div class="sub">v20 · medición seria (Brier vs mercado, calibración) + descanso + totales del mercado</div>
+<div class="sub">v21 · medición seria (Brier vs mercado, calibración) + respaldo en la nube</div>
 <div class="st" id="st">⏳ Conectando...</div>
 
 <div class="tabs">
@@ -150,7 +150,7 @@ function load(){
     if(!d.ok)throw new Error(d.error||'backend devolvió error');
     ALL=d.predictions||[];
     $('st').className='st ok';$('st').textContent='✅ '+ALL.length+' partidos reales ('+(d.window?d.window.from+'→'+d.window.to:'')+')'+(d.oddsEnabled?' · 💰 cuotas':'');
-    sync();chips();render();dash();enrichStats();
+    sync();chips();render();dash();enrichStats();if(!PULLED){PULLED=1;pull();}
   }).catch(function(e){
     clearTimeout(to);
     $('st').className='st err';
@@ -172,18 +172,27 @@ function enrichStats(){
   });
 }
 function tri(o){return o?[o.home,o.draw,o.away]:null;}
+var PULLED=0,DIRTY={};
+function srv(action,body){return fetch('api/log?action='+action,{method:body?'POST':'GET',headers:{'Content-Type':'application/json'},body:body?JSON.stringify(body):undefined}).then(function(r){return r.json();});}
+function push(){var ids=Object.keys(DIRTY);if(!ids.length)return;var arr=ids.map(function(k){return DB.preds[k];}).filter(Boolean);if(!arr.length)return;
+  srv('save',{preds:arr}).then(function(d){if(d&&d.ok){ids.forEach(function(k){delete DIRTY[k];});}}).catch(function(){});}
+function pull(){srv('list').then(function(d){if(!d||!d.ok)return;var ch=false,onSrv={};
+  d.preds.forEach(function(p){onSrv[p.id]=1;var l=DB.preds[p.id];if(!l){DB.preds[p.id]=p;ch=true;}else if(l.estado==='pend'&&p.estado!=='pend'){DB.preds[p.id]=p;ch=true;}});
+  Object.keys(DB.preds).forEach(function(k){if(!onSrv[k])DIRTY[k]=1;});
+  if(ch){save();dash();render();}push();
+  $('st').textContent=$('st').textContent+' · ☁️ respaldo ('+d.count+')';}).catch(function(){});}
 function sync(){var ch=false;var SK={home:'h',draw:'d',away:'a'};
   ALL.forEach(function(m){var st=normStatus(m.status);var k=String(m.id);
     if(st==='pre'){
-      if(!DB.preds[k]){var mk=markets(m.hL,m.aL);DB.preds[k]={id:k,home:m.home,away:m.away,league:m.league,pred:m.main,score:mk.top[0].h+'-'+mk.top[0].a,pr:[m.probs.home,m.probs.draw,m.probs.away],pm:tri(m.modelProbs),pk:tri(m.marketProbs),oddsOpen:m.odds?{h:m.odds.h,d:m.odds.d,a:m.odds.a}:null,oddsLast:m.odds?{h:m.odds.h,d:m.odds.d,a:m.odds.a}:null,estado:'pend',rs:null};ch=true;}
+      if(!DB.preds[k]){var mk=markets(m.hL,m.aL);DB.preds[k]={id:k,home:m.home,away:m.away,league:m.league,pred:m.main,score:mk.top[0].h+'-'+mk.top[0].a,pr:[m.probs.home,m.probs.draw,m.probs.away],pm:tri(m.modelProbs),pk:tri(m.marketProbs),oddsOpen:m.odds?{h:m.odds.h,d:m.odds.d,a:m.odds.a}:null,oddsLast:m.odds?{h:m.odds.h,d:m.odds.d,a:m.odds.a}:null,estado:'pend',rs:null};ch=true;DIRTY[k]=1;}
       else{var q=DB.preds[k];
-        if(m.odds){q.oddsLast={h:m.odds.h,d:m.odds.d,a:m.odds.a};ch=true;}
-        if(!q.pk&&m.marketProbs){q.pk=tri(m.marketProbs);ch=true;}}
+        if(m.odds){q.oddsLast={h:m.odds.h,d:m.odds.d,a:m.odds.a};ch=true;DIRTY[k]=1;}
+        if(!q.pk&&m.marketProbs){q.pk=tri(m.marketProbs);ch=true;DIRTY[k]=1;}}
     }
     if(st==='post'&&m.score&&DB.preds[k]&&DB.preds[k].estado==='pend'){var p=DB.preds[k];p.rs=m.score.home+'-'+m.score.away;var real=m.score.home>m.score.away?'home':(m.score.home<m.score.away?'away':'draw');p.estado=(p.pred===real)?'win':'loss';
       if(p.oddsOpen&&p.oddsLast){var o=p.oddsOpen[SK[p.pred]],c2=p.oddsLast[SK[p.pred]];if(o&&c2)p.clv=+((o/c2-1)*100).toFixed(1);}
-      ch=true;}
-  });if(ch)save();}
+      ch=true;DIRTY[k]=1;}
+  });if(ch){save();push();}}
 function toggleConf(){CONF=!CONF;localStorage.setItem('fpconf',CONF?'1':'0');$('confBtn').classList.toggle('on',CONF);render();}
 function chips(){var s={};ALL.forEach(function(m){s[m.league]=1;});var n=Object.keys(s).slice(0,18);
   var h='<div class="chip '+(curL==='all'?'on':'')+'" onclick="setL(\'all\')">🌍 Todas</div>';
