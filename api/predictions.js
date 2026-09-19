@@ -193,8 +193,8 @@ export default async function handler(req, res) {
       ]);
       const map = {};
       all.forEach(function (arr) { arr.forEach(function (m) { map[m.id] = m; }); });
-      cache.data = Object.values(map);
-      cache.ts = now; cache.key = key;
+      const arr2 = Object.values(map);
+      if (arr2.length) { cache.data = arr2; cache.ts = now; cache.key = key; }
     }
 
     const finished = cache.data.filter(function (m) { return !isUpcoming(m.status); });
