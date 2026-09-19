@@ -5,6 +5,21 @@ function cors(res) {
   res.setHeader('Access-Control-Allow-Methods', 'GET,OPTIONS');
   res.setHeader('Access-Control-Allow-Headers', 'Content-Type');
 }
+// Parser CSV que respeta campos entre comillas (evita el desastre de las comas internas)
+function parseLine(line) {
+  const out = [];
+  let cur = '', inQ = false;
+  for (let i = 0; i < line.length; i++) {
+    const ch = line[i];
+    if (ch === '"') {
+      if (inQ && line[i + 1] === '"') { cur += '"'; i++; }
+      else inQ = !inQ;
+    } else if (ch === ',' && !inQ) { out.push(cur); cur = ''; }
+    else cur += ch;
+  }
+  out.push(cur);
+  return out;
+}
 function normName(s) {
   return String(s).toLowerCase()
     .replace(/[áàäâéèëêíìïîóòöôúùüûñç]/g, function (c) {
@@ -37,7 +52,7 @@ async function fetchStats(cfg, key) {
       const text = await r.text();
       const lines = text.trim().split(/\r?\n/);
       if (lines.length < 2) continue;
-      const head = lines[0].split(',');
+      const head = parseLine(lines[0]);
       const idx = {}; head.forEach(function (h, i) { idx[h.trim().toLowerCase()] = i; });
       function findCol(test) { for (const k in idx) { if (test(k)) return idx[k]; } return -1; }
       function pref(test) {
@@ -62,7 +77,7 @@ async function fetchStats(cfg, key) {
       if (cShH === -1 && cXgH === -1) continue;
       const agg = {};
       for (let i = 1; i < lines.length; i++) {
-        const col = lines[i].split(',');
+        const col = parseLine(lines[i]);
         const hn = (col[cHome] || '').trim(), an = (col[cAway] || '').trim();
         if (!hn || !an) continue;
         function num(ci) { if (ci === -1 || ci === undefined) return null; const v = parseFloat(col[ci]); return isFinite(v) ? v : null; }
@@ -81,8 +96,13 @@ async function fetchStats(cfg, key) {
         const a = agg[k];
         if (a.n < 2) continue;
         out[normName(k)] = {
-          sh: +(a.sh / a.n).toFixed(1), sot: +(a.sot / a.n).toFixed(1), cor: +(a.cor / a.n).toFixed(1),
-          fou: +(a.fou / a.n).toFixed(1), yc: +(a.yc / a.n).toFixed(1), xg: +(a.xg / a.n).toFixed(2), n: a.n
+          sh: +Math.min(a.sh / a.n, 35).toFixed(1),
+          sot: +Math.min(a.sot / a.n, 15).toFixed(1),
+          cor: +Math.min(a.cor / a.n, 15).toFixed(1),
+          fou: +Math.min(a.fou / a.n, 30).toFixed(1),
+          yc: +Math.min(a.yc / a.n, 6).toFixed(1),
+          xg: +Math.min(a.xg / a.n, 4.5).toFixed(2),
+          n: a.n
         };
       }
       if (Object.keys(out).length) return out;
@@ -93,7 +113,7 @@ async function fetchStats(cfg, key) {
 
 export default async function handler(req, res) {
   cors(res);
-  res.setHeader('Cache-Control', 's-maxage=3600');
+  res.setHeader('Cache-Control', 's-maxage=300');
   if (req.method === 'OPTIONS') return res.status(200).end();
   const key = process.env.FUTPYTHON_API_KEY;
   if (!key) return res.status(200).json({ ok: false, error: 'falta FUTPYTHON_API_KEY' });
@@ -104,4 +124,4 @@ export default async function handler(req, res) {
   const agg = await fetchStats(cfg, key);
   if (!agg) return res.status(200).json({ ok: false, error: 'sin datos para esta liga' });
   res.status(200).json({ ok: true, league: league, teams: agg });
-          }
+    }
