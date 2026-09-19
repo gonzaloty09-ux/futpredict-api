@@ -164,6 +164,15 @@ function findOdds(list, fh, fa) {
   }
   return null;
 }
+// Búsqueda flexible de equipo en el agregado de stats
+function findTeam(agg, name) {
+  const n = normName(name);
+  if (agg[n]) return agg[n];
+  for (const k in agg) {
+    if (n.indexOf(k) !== -1 || k.indexOf(n) !== -1) return agg[k];
+  }
+  return null;
+}
 function isUpcoming(status) {
   const s = (status || '').toUpperCase();
   return s.indexOf('FIN') !== 0 && s.indexOf('POST') !== 0;
@@ -181,7 +190,6 @@ async function fetchStats(cfg, key) {
       const head = lines[0].split(',');
       const idx = {}; head.forEach(function (h, i) { idx[h.trim().toLowerCase()] = i; });
       function findCol(test) { for (const k in idx) { if (test(k)) return idx[k]; } return -1; }
-      // Prefiere columnas de partido completo (_FT); si no existen, usa cualquiera
       function pref(test) {
         const ft = findCol(function (k) { return test(k) && k.indexOf('_ft') !== -1; });
         if (ft !== -1) return ft;
@@ -349,6 +357,7 @@ export default async function handler(req, res) {
       });
     }
 
+    let statsInfo = [];
     if (fptKey) {
       const srcs = {};
       out.forEach(function (p) {
@@ -366,8 +375,11 @@ export default async function handler(req, res) {
       out.forEach(function (p) {
         const e = STATS[p.league];
         if (!e || !e.agg) return;
-        const h = e.agg[normName(p.home)], a = e.agg[normName(p.away)];
+        const h = findTeam(e.agg, p.home), a = findTeam(e.agg, p.away);
         if (h && a) p.stats = { home: h, away: a };
+      });
+      statsInfo = Object.keys(STATS).map(function (lg) {
+        return { liga: lg, equipos: STATS[lg].agg ? Object.keys(STATS[lg].agg).length : 0 };
       });
     }
 
@@ -376,8 +388,4 @@ export default async function handler(req, res) {
         : p.probs.away >= p.probs.home && p.probs.away >= p.probs.draw ? 'away' : 'draw';
     });
     out.sort(function (a, b) { return (a.time || '').localeCompare(b.time || ''); });
-    res.status(200).json({ ok: true, parser: 'v7', count: out.length, window: { from, to }, oddsEnabled: !!oddsKey, statsEnabled: !!fptKey, predictions: out, generated: new Date().toISOString() });
-  } catch (e) {
-    res.status(500).json({ ok: false, error: String(e.message || e) });
-  }
-    }
+    res.status(200).json({ ok: true, parser: 'v8', count: out.length
