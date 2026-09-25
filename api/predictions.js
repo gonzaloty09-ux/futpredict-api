@@ -14,14 +14,33 @@ let KV_LOADED = 0;
 let KV_ERR = null;
 
 // Ligas de API-Football que NO están en el plan gratis de football-data.org (evita duplicar cobertura).
-// Para sumar más, buscá el id de la liga en el dashboard de API-Football y agregalo aquí.
+// Para sumar más, buscá el id de la liga en el dashboard de API-Football (Soccer > Leagues) y agregalo aquí.
+// Los ids marcados "verificar" son los IDs habituales de API-Football pero no pude confirmarlos 100%:
+// si después de desplegar una de estas ligas nunca aparece con partidos, revisa su id real en
+// https://dashboard.api-football.com (sección Leagues, buscá el nombre) y corregilo acá.
 const AF_LEAGUES = {
+  // Ligas domésticas fuera de football-data.org gratis
   128: 'Liga Profesional Argentina',
   253: 'MLS',
   262: 'Liga MX',
   307: 'Saudi Pro League',
   203: 'Süper Lig',
-  144: 'Belgian Pro League'
+  144: 'Belgian Pro League',
+  179: 'Scottish Premiership',
+  207: 'Swiss Super League',
+  218: 'Austrian Bundesliga',
+  197: 'Greek Super League',
+  98: 'J1 League (Japón)',
+  292: 'K League 1 (Corea)',
+  188: 'A-League (Australia)',
+  // Selecciones: estas siguen jugando durante los parones FIFA que dejan las ligas domésticas paradas
+  5: 'UEFA Nations League',
+  10: 'Amistosos de selecciones (Friendlies)',
+  32: 'Eliminatorias Mundial - Europa (verificar)',
+  34: 'Eliminatorias Mundial - Sudamérica (verificar)',
+  29: 'Eliminatorias Mundial - África (verificar)',
+  30: 'Eliminatorias Mundial - Asia (verificar)',
+  31: 'Eliminatorias Mundial - Concacaf (verificar)'
 };
 
 async function dbq(sql, params, ms) {
