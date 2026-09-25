@@ -10,7 +10,7 @@ export default async function handler(req, res) {
     const simple = (j.response || []).map(function (x) {
       return { id: x.league.id, name: x.league.name, type: x.league.type, country: x.country.name };
     });
-    res.status(200).json({ query: q, count: simple.length, results: simple });
+    res.status(200).json({ query: q, httpStatus: r.status, apiErrors: j.errors, rawResults: j.results, count: simple.length, results: simple });
   } catch (e) {
     res.status(500).json({ error: String(e.message || e) });
   }
