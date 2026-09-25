@@ -415,7 +415,6 @@ export default async function handler(req, res) {
       const rH = restDays(hn, tMs), rA = restDays(an, tMs);
       const hL = cl(lH * home.attH * away.defA * restFactor(rH), 0.25, 3.6);
       const aL = cl(lA * away.attA * home.defH * restFactor(rA), 0.2, 3.2);
-      3.2);
       const sampleN = (home.n + away.n) / 2;
       const bp = buildProbs(hL, aL, sampleN);
       const formOf = function (team) { return (H && H.form && H.form[team]) ? H.form[team] : []; };
