@@ -235,6 +235,17 @@ async function loadAF(from, to, key) {
   results.forEach(function (r) { all.push.apply(all, r); });
   return afNormalize(all);
 }
+async function loadFD(from, to, token) {
+  const grab = function (label) { return function (e) { FD_ERRS.push(label + ': ' + String((e && e.message) || e)); return []; }; };
+  const all = await Promise.all([
+    fd('/matches?dateFrom=' + from + '&dateTo=' + to, token).then(function (r) { return r.matches || []; }).catch(grab('matches')),
+    fd('/competitions/CL/matches?dateFrom=' + from + '&dateTo=' + to, token).then(function (r) { return r.matches || []; }).catch(grab('CL')),
+    fd('/competitions/EL/matches?dateFrom=' + from + '&dateTo=' + to, token).then(function (r) { return r.matches || []; }).catch(grab('EL'))
+  ]);
+  const map = {};
+  all.forEach(function (arr) { arr.forEach(function (m) { map[m.id] = m; }); });
+  return Object.values(map);
+}
 async function fetchOdds(sport, key) {
   const c = new AbortController(); const t = setTimeout(function () { c.abort(); }, 5000);
   try {
@@ -301,34 +312,23 @@ export default async function handler(req, res) {
     const key = from + '_' + to;
     const fromMs = new Date(from + 'T00:00:00Z').getTime();
 
-    if (!cache.data || cache.key !== key || now - cache.ts > 30 * 60 * 1000) {
-      FD_ERRS = [];
-      const grab = function (label) { return function (e) { FD_ERRS.push(label + ': ' + String((e && e.message) || e)); return []; }; };
-      const all = await Promise.all([
-        fd('/matches?dateFrom=' + from + '&dateTo=' + to, token).then(function (r) { return r.matches || []; }).catch(grab('matches')),
-        fd('/competitions/CL/matches?dateFrom=' + from + '&dateTo=' + to, token).then(function (r) { return r.matches || []; }).catch(grab('CL')),
-        fd('/competitions/EL/matches?dateFrom=' + from + '&dateTo=' + to, token).then(function (r) { return r.matches || []; }).catch(grab('EL'))
-      ]);
-      const map = {};
-      all.forEach(function (arr) { arr.forEach(function (m) { map[m.id] = m; }); });
-      const arr2 = Object.values(map);
-      if (arr2.length) { cache.data = arr2; cache.ts = now; cache.key = key; }
-    }
-
+    const fdNeeded = !cache.data || cache.key !== key || now - cache.ts > 30 * 60 * 1000;
     // API-Football: fuente adicional de fixtures, ligas que football-data.org no cubre.
     // Caché de 3h (no 30 min como football-data) para cuidar el límite de 100 req/día.
-    let afData = [];
-    if (afKey) {
-      const afTTL = 3 * 60 * 60 * 1000;
-      if (!afCache.data || afCache.key !== key || now - afCache.ts > afTTL) {
-        AF_ERRS = [];
-        try {
-          const fresh = await loadAF(from, to, afKey);
-          if (fresh.length) { afCache.data = fresh; afCache.ts = now; afCache.key = key; }
-        } catch (e) { AF_ERRS.push('af: ' + String((e && e.message) || e)); }
-      }
-      afData = afCache.data || [];
-    }
+    const afTTL = 3 * 60 * 60 * 1000;
+    const afNeeded = !!afKey && (!afCache.data || afCache.key !== key || now - afCache.ts > afTTL);
+
+    if (fdNeeded) FD_ERRS = [];
+    if (afNeeded) AF_ERRS = [];
+    // Las dos fuentes se piden EN PARALELO (no una después de la otra): sumadas en serie
+    // se pasaban del tiempo límite de la función en Vercel y todo terminaba abortado.
+    const [fdArr, afArr] = await Promise.all([
+      fdNeeded ? loadFD(from, to, token) : Promise.resolve(null),
+      afNeeded ? loadAF(from, to, afKey).catch(function (e) { AF_ERRS.push('af: ' + String((e && e.message) || e)); return null; }) : Promise.resolve(null)
+    ]);
+    if (fdArr && fdArr.length) { cache.data = fdArr; cache.ts = now; cache.key = key; }
+    if (afArr && afArr.length) { afCache.data = afArr; afCache.ts = now; afCache.key = key; }
+    const afData = afKey ? (afCache.data || []) : [];
     const allMatches = (cache.data || []).concat(afData);
 
     if (!allMatches.length) {
@@ -415,6 +415,7 @@ export default async function handler(req, res) {
       const rH = restDays(hn, tMs), rA = restDays(an, tMs);
       const hL = cl(lH * home.attH * away.defA * restFactor(rH), 0.25, 3.6);
       const aL = cl(lA * away.attA * home.defH * restFactor(rA), 0.2, 3.2);
+      3.2);
       const sampleN = (home.n + away.n) / 2;
       const bp = buildProbs(hL, aL, sampleN);
       const formOf = function (team) { return (H && H.form && H.form[team]) ? H.form[team] : []; };
