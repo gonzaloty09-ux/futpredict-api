@@ -5,7 +5,7 @@
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <meta name="theme-color" content="#00ff88">
 <link rel="manifest" href="/manifest.webmanifest">
-<title>⚽ FutPredict Pro v22</title>
+<title>⚽ FutPredict Pro v23</title>
 <style>
 *{margin:0;padding:0;box-sizing:border-box;font-family:Arial,sans-serif}
 :root{--p:#00ff88;--s:#00d4ff;--bg:#0a0e1a;--c:rgba(255,255,255,.05);--t:#fff;--t2:#a0a0b0;--d:#ff4757;--w:#ffa502}
@@ -71,7 +71,7 @@ h1{font-size:1.5rem;color:var(--p);text-align:center}
 </head>
 <body>
 <h1>⚽ FutPredict Pro</h1>
-<div class="sub">v22 · medición seria (Brier vs mercado, calibración) + respaldo en la nube + Sofascore (stats del partido real)</div>
+<div class="sub">v23 · medición seria (Brier solo con muestra suficiente) + respaldo en la nube</div>
 <div class="st" id="st">⏳ Conectando...</div>
 
 <div class="tabs">
@@ -204,7 +204,7 @@ function pull(){srv('list').then(function(d){if(!d||!d.ok)return;var ch=false,on
 function sync(){var ch=false;var SK={home:'h',draw:'d',away:'a'};
   ALL.forEach(function(m){var st=normStatus(m.status);var k=String(m.id);
     if(st==='pre'){
-      if(!DB.preds[k]){var mk=markets(m.hL,m.aL);DB.preds[k]={id:k,home:m.home,away:m.away,league:m.league,pred:m.main,score:mk.top[0].h+'-'+mk.top[0].a,pr:[m.probs.home,m.probs.draw,m.probs.away],pm:tri(m.modelProbs),pk:tri(m.marketProbs),oddsOpen:m.odds?{h:m.odds.h,d:m.odds.d,a:m.odds.a}:null,oddsLast:m.odds?{h:m.odds.h,d:m.odds.d,a:m.odds.a}:null,estado:'pend',rs:null};ch=true;DIRTY[k]=1;}
+      if(!DB.preds[k]){var mk=markets(m.hL,m.aL);DB.preds[k]={id:k,home:m.home,away:m.away,league:m.league,pred:m.main,score:mk.top[0].h+'-'+mk.top[0].a,pr:[m.probs.home,m.probs.draw,m.probs.away],sn:m.sampleN||0,pm:tri(m.modelProbs),pk:tri(m.marketProbs),oddsOpen:m.odds?{h:m.odds.h,d:m.odds.d,a:m.odds.a}:null,oddsLast:m.odds?{h:m.odds.h,d:m.odds.d,a:m.odds.a}:null,estado:'pend',rs:null};ch=true;DIRTY[k]=1;}
       else{var q=DB.preds[k];
         if(m.odds){q.oddsLast={h:m.odds.h,d:m.odds.d,a:m.odds.a};ch=true;DIRTY[k]=1;}
         if(!q.pk&&m.marketProbs){q.pk=tri(m.marketProbs);ch=true;DIRTY[k]=1;}}
@@ -278,7 +278,10 @@ $('modal').addEventListener('click',function(e){if(e.target.id==='modal')closeM(
 function f3(x){return x==null?'--':x.toFixed(3);}
 function dash(){var p=Object.values(DB.preds);var d=p.filter(function(x){return x.estado!=='pend';});var w=d.filter(function(x){return x.estado==='win';}).length;
   $('dAcc').textContent=d.length?Math.round(w/d.length*100)+'%':'--';$('dN').textContent=p.length;$('dW').textContent=w;
-  var dec=p.filter(function(x){return x.pr&&x.rs;});var bl=[],ll=0;
+  var decAll=p.filter(function(x){return x.pr&&x.rs;});
+  var dec=decAll.filter(function(x){return(x.sn==null)||x.sn>=4;}); // Brier/log-loss solo cuentan si el modelo tenía algo de muestra
+  var excl=decAll.length-dec.length;
+  var bl=[],ll=0;
   dec.forEach(function(x){var o=outc(x.rs);var q=pct(x.pr);bl.push(bs(q,o));
     ll+=-(o[0]*Math.log(Math.max(q[0],1e-6))+o[1]*Math.log(Math.max(q[1],1e-6))+o[2]*Math.log(Math.max(q[2],1e-6)));});
   $('dBrier').textContent=f3(mean(bl));
@@ -287,7 +290,7 @@ function dash(){var p=Object.values(DB.preds);var d=p.filter(function(x){return 
   cm.forEach(function(x){var o=outc(x.rs);var a=bs(pct(x.pk),o),b=bs(pct(x.pr),o);bk.push(a);bx.push(b);df.push(b-a);});
   $('dMB').textContent=f3(mean(bk));$('dMX').textContent=f3(mean(bx));
   var sd=seOf(df);
-  $('dNote').innerHTML='n='+dec.length+' con resultado'+(sd!=null?' · Mezcla − Mercado = '+mean(df).toFixed(3)+' ±'+sd.toFixed(3)+' (n='+cm.length+'). Si el rango incluye 0, no hay diferencia real.':(cm.length?' · con cuotas: '+cm.length+' (aún pocos)':' · aún sin partidos con cuotas guardadas'));
+  $('dNote').innerHTML='n='+dec.length+' informadas (n≥4)'+(excl?' · '+excl+' excluidas por muestra chica (n<4)':'')+(sd!=null?' · Mezcla − Mercado = '+mean(df).toFixed(3)+' ±'+sd.toFixed(3)+' (n='+cm.length+'). Si el rango incluye 0, no hay diferencia real.':(cm.length?' · con cuotas: '+cm.length+' (aún pocos)':' · aún sin partidos con cuotas guardadas'));
   var clvs=p.filter(function(x){return x.clv!=null;});
   $('dCLV').textContent=clvs.length?(clvs.reduce(function(s,x){return s+x.clv;},0)/clvs.length).toFixed(1)+'%':'--';
   var E=[0,0.4,0.5,0.6,0.7,1.01],L=['<40%','40-50%','50-60%','60-70%','70%+'],ch='';
