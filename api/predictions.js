@@ -1,10 +1,7 @@
 const API = 'https://api.football-data.org/v4';
 const ODDS_API = 'https://api.the-odds-api.com/v4';
-const AF_API = 'https://v3.football.api-sports.io';
 const cache = { data: null, ts: 0, key: '' };
-const afCache = { data: null, ts: 0, key: '' };
 let FD_ERRS = [];
-let AF_ERRS = [];
 const HIST = {};
 const ODDS = {};
 let ODDS_LEFT = null;
@@ -12,36 +9,6 @@ let ODDS_LEFT_TS = 0;
 let KV_READY = false;
 let KV_LOADED = 0;
 let KV_ERR = null;
-
-// Ligas de API-Football que NO están en el plan gratis de football-data.org (evita duplicar cobertura).
-// Para sumar más, buscá el id de la liga en el dashboard de API-Football (Soccer > Leagues) y agregalo aquí.
-// Los ids marcados "verificar" son los IDs habituales de API-Football pero no pude confirmarlos 100%:
-// si después de desplegar una de estas ligas nunca aparece con partidos, revisa su id real en
-// https://dashboard.api-football.com (sección Leagues, buscá el nombre) y corregilo acá.
-const AF_LEAGUES = {
-  // Ligas domésticas fuera de football-data.org gratis
-  128: 'Liga Profesional Argentina',
-  253: 'MLS',
-  262: 'Liga MX',
-  307: 'Saudi Pro League',
-  203: 'Süper Lig',
-  144: 'Belgian Pro League',
-  179: 'Scottish Premiership',
-  207: 'Swiss Super League',
-  218: 'Austrian Bundesliga',
-  197: 'Greek Super League',
-  98: 'J1 League (Japón)',
-  292: 'K League 1 (Corea)',
-  188: 'A-League (Australia)',
-  // Selecciones: estas siguen jugando durante los parones FIFA que dejan las ligas domésticas paradas
-  5: 'UEFA Nations League',
-  10: 'Amistosos de selecciones (Friendlies)',
-  32: 'Eliminatorias Mundial - Europa (verificar)',
-  34: 'Eliminatorias Mundial - Sudamérica (verificar)',
-  29: 'Eliminatorias Mundial - África (verificar)',
-  30: 'Eliminatorias Mundial - Asia (verificar)',
-  31: 'Eliminatorias Mundial - Concacaf (verificar)'
-};
 
 async function dbq(sql, params, ms) {
   const cs = process.env.DATABASE_URL || process.env.POSTGRES_URL;
@@ -120,6 +87,12 @@ function mapLeague(name) {
   if (n.indexOf('primeira liga') !== -1) return 'soccer_portugal_primeira_liga';
   if (n.indexOf('championship') !== -1) return 'soccer_efl_champ';
   if (n.indexOf('libertadores') !== -1) return 'soccer_conmebol_libertadores';
+  if (n.indexOf('sudamericana') !== -1) return 'soccer_conmebol_sudamericana';
+  if (n.indexOf('brasileiro') !== -1 || n.indexOf('brasileirão') !== -1) return 'soccer_brazil_campeonato';
+  if (n.indexOf('mls') !== -1 || n.indexOf('major league soccer') !== -1) return 'soccer_usa_mls';
+  if (n.indexOf('world cup') !== -1 || n.indexOf('mundial') !== -1) return 'soccer_fifa_world_cup';
+  if (n.indexOf('euro') !== -1 && n.indexOf('championship') !== -1) return 'soccer_uefa_european_championship';
+  // Sin confirmar en vivo: si una liga no trae cuotas, revisar que esta clave coincida con el listado real de The Odds API.
   return null;
 }
 function factorial(n) { let r = 1; for (let i = 2; i <= n; i++) r *= i; return r; }
@@ -209,62 +182,6 @@ async function fd(path, token, ms) {
     return await r.json();
   } finally { clearTimeout(t); }
 }
-async function afFetchDate(dateStr, key, ms) {
-  ms = ms || 6000;
-  const c = new AbortController(); const t = setTimeout(function () { c.abort(); }, ms);
-  try {
-    const r = await fetch(AF_API + '/fixtures?date=' + dateStr, { headers: { 'x-apisports-key': key }, signal: c.signal });
-    if (!r.ok) throw new Error('af ' + r.status);
-    const j = await r.json();
-    return j.response || [];
-  } finally { clearTimeout(t); }
-}
-function afStatus(short) {
-  if (short === 'FT' || short === 'AET' || short === 'PEN') return 'FINISHED';
-  if (short === 'PST' || short === 'CANC' || short === 'ABD') return 'POSTPONED';
-  if (short === '1H' || short === '2H' || short === 'HT' || short === 'LIVE' || short === 'ET' || short === 'BT' || short === 'P') return 'IN_PLAY';
-  return 'SCHEDULED';
-}
-function afNormalize(fixtures) {
-  const out = [];
-  fixtures.forEach(function (f) {
-    if (!AF_LEAGUES[f.league.id]) return;
-    out.push({
-      id: 'af' + f.fixture.id,
-      utcDate: f.fixture.date,
-      status: afStatus(f.fixture.status.short),
-      homeTeam: { name: f.teams.home.name },
-      awayTeam: { name: f.teams.away.name },
-      score: { fullTime: { home: f.goals.home, away: f.goals.away } },
-      competition: { id: 'af-' + f.league.id, name: f.league.name }
-    });
-  });
-  return out;
-}
-// Un request por día del rango (máx. 9). En paralelo: 9 llamadas caben bajo el límite de 10/min de API-Football.
-async function loadAF(from, to, key) {
-  const days = [];
-  let d = new Date(from + 'T00:00:00Z');
-  const end = new Date(to + 'T00:00:00Z');
-  while (d <= end) { days.push(d.toISOString().split('T')[0]); d = new Date(d.getTime() + 86400000); }
-  const results = await Promise.all(days.map(function (day) {
-    return afFetchDate(day, key, 6000).catch(function (e) { AF_ERRS.push(day + ': ' + String((e && e.message) || e)); return []; });
-  }));
-  const all = [];
-  results.forEach(function (r) { all.push.apply(all, r); });
-  return afNormalize(all);
-}
-async function loadFD(from, to, token) {
-  const grab = function (label) { return function (e) { FD_ERRS.push(label + ': ' + String((e && e.message) || e)); return []; }; };
-  const all = await Promise.all([
-    fd('/matches?dateFrom=' + from + '&dateTo=' + to, token).then(function (r) { return r.matches || []; }).catch(grab('matches')),
-    fd('/competitions/CL/matches?dateFrom=' + from + '&dateTo=' + to, token).then(function (r) { return r.matches || []; }).catch(grab('CL')),
-    fd('/competitions/EL/matches?dateFrom=' + from + '&dateTo=' + to, token).then(function (r) { return r.matches || []; }).catch(grab('EL'))
-  ]);
-  const map = {};
-  all.forEach(function (arr) { arr.forEach(function (m) { map[m.id] = m; }); });
-  return Object.values(map);
-}
 async function fetchOdds(sport, key) {
   const c = new AbortController(); const t = setTimeout(function () { c.abort(); }, 5000);
   try {
@@ -320,7 +237,6 @@ export default async function handler(req, res) {
   if (req.method === 'OPTIONS') return res.status(200).end();
   const token = process.env.FOOTBALL_DATA_TOKEN;
   const oddsKey = process.env.ODDS_API_KEY || null;
-  const afKey = process.env.APIFOOTBALL_KEY || null;
   if (!token) return res.status(500).json({ ok: false, error: 'Falta FOOTBALL_DATA_TOKEN' });
   try {
     const now = Date.now();
@@ -331,30 +247,28 @@ export default async function handler(req, res) {
     const key = from + '_' + to;
     const fromMs = new Date(from + 'T00:00:00Z').getTime();
 
-    const fdNeeded = !cache.data || cache.key !== key || now - cache.ts > 30 * 60 * 1000;
-    // API-Football: fuente adicional de fixtures, ligas que football-data.org no cubre.
-    // Caché de 3h (no 30 min como football-data) para cuidar el límite de 100 req/día.
-    const afTTL = 3 * 60 * 60 * 1000;
-    const afNeeded = !!afKey && (!afCache.data || afCache.key !== key || now - afCache.ts > afTTL);
-
-    if (fdNeeded) FD_ERRS = [];
-    if (afNeeded) AF_ERRS = [];
-    // Las dos fuentes se piden EN PARALELO (no una después de la otra): sumadas en serie
-    // se pasaban del tiempo límite de la función en Vercel y todo terminaba abortado.
-    const [fdArr, afArr] = await Promise.all([
-      fdNeeded ? loadFD(from, to, token) : Promise.resolve(null),
-      afNeeded ? loadAF(from, to, afKey).catch(function (e) { AF_ERRS.push('af: ' + String((e && e.message) || e)); return null; }) : Promise.resolve(null)
-    ]);
-    if (fdArr && fdArr.length) { cache.data = fdArr; cache.ts = now; cache.key = key; }
-    if (afArr && afArr.length) { afCache.data = afArr; afCache.ts = now; afCache.key = key; }
-    const afData = afKey ? (afCache.data || []) : [];
-    const allMatches = (cache.data || []).concat(afData);
-
-    if (!allMatches.length) {
-      return res.status(200).json({ ok: true, count: 0, window: { from, to }, oddsEnabled: !!oddsKey, statsEnabled: !!process.env.FUTPYTHON_API_KEY, afEnabled: !!afKey, predictions: [], generated: new Date().toISOString(), errors: FD_ERRS.concat(AF_ERRS), note: 'cargando, volvé a abrir en unos segundos' });
+    if (!cache.data || cache.key !== key || now - cache.ts > 30 * 60 * 1000) {
+      FD_ERRS = [];
+      const grab = function (label) { return function (e) { FD_ERRS.push(label + ': ' + String((e && e.message) || e)); return []; }; };
+      const all = await Promise.all([
+        fd('/matches?dateFrom=' + from + '&dateTo=' + to, token).then(function (r) { return r.matches || []; }).catch(grab('matches')),
+        fd('/competitions/CL/matches?dateFrom=' + from + '&dateTo=' + to, token).then(function (r) { return r.matches || []; }).catch(grab('CL')),
+        fd('/competitions/EL/matches?dateFrom=' + from + '&dateTo=' + to, token).then(function (r) { return r.matches || []; }).catch(grab('EL')),
+        // Competencias internacionales: solo entran si tu plan de football-data.org las incluye; si no, el catch las deja afuera sin romper nada.
+        fd('/competitions/WC/matches?dateFrom=' + from + '&dateTo=' + to, token).then(function (r) { return r.matches || []; }).catch(grab('WC')),
+        fd('/competitions/EC/matches?dateFrom=' + from + '&dateTo=' + to, token).then(function (r) { return r.matches || []; }).catch(grab('EC'))
+      ]);
+      const map = {};
+      all.forEach(function (arr) { arr.forEach(function (m) { map[m.id] = m; }); });
+      const arr2 = Object.values(map);
+      if (arr2.length) { cache.data = arr2; cache.ts = now; cache.key = key; }
     }
 
-    const finished = allMatches.filter(function (m) { return !isUpcoming(m.status); });
+    if (!cache.data || !cache.data.length) {
+      return res.status(200).json({ ok: true, count: 0, window: { from, to }, oddsEnabled: !!oddsKey, statsEnabled: !!process.env.FUTPYTHON_API_KEY, predictions: [], generated: new Date().toISOString(), errors: FD_ERRS, note: 'cargando, volvé a abrir en unos segundos' });
+    }
+
+    const finished = cache.data.filter(function (m) { return !isUpcoming(m.status); });
     const FB = buildRatings(finished, now);
 
     function buildTeamFin() {
@@ -388,15 +302,14 @@ export default async function handler(req, res) {
 
     const comps = {};
     const upcomingComps = {};
-    allMatches.forEach(function (m) {
+    cache.data.forEach(function (m) {
       comps[m.competition.id] = true;
       if (isUpcoming(m.status)) upcomingComps[m.competition.id] = true;
     });
     await kvLoad(now);
     const upCount = {};
-    allMatches.forEach(function (m) { if (isUpcoming(m.status)) upCount[m.competition.id] = (upCount[m.competition.id] || 0) + 1; });
+    cache.data.forEach(function (m) { if (isUpcoming(m.status)) upCount[m.competition.id] = (upCount[m.competition.id] || 0) + 1; });
     const missing = Object.keys(comps).filter(function (cid) {
-      if (String(cid).indexOf('af-') === 0) return false; // ligas de API-Football: sin historial vía football-data.org
       const e = HIST[cid];
       const ttl = (e && e.ok) ? 3 * 60 * 60 * 1000 : 60 * 1000;
       return !e || now - e.ts > ttl;
@@ -419,7 +332,7 @@ export default async function handler(req, res) {
     }));
 
     const out = [];
-    allMatches.forEach(function (m) {
+    cache.data.forEach(function (m) {
       const tMs = new Date(m.utcDate).getTime();
       if (tMs < fromMs) return;
       const hn = m.homeTeam.name, an = m.awayTeam.name;
@@ -516,13 +429,13 @@ export default async function handler(req, res) {
     });
     out.sort(function (a, b) { return (a.time || '').localeCompare(b.time || ''); });
     const compName = {};
-    allMatches.forEach(function (m) { compName[m.competition.id] = m.competition.name; });
+    cache.data.forEach(function (m) { compName[m.competition.id] = m.competition.name; });
     const histInfo = {};
     for (const cid in comps) {
       const e = HIST[cid];
       histInfo[compName[cid] || cid] = e ? (e.ok ? { ok: true, partidos: e.count } : { ok: false, err: e.err || 'sin datos' }) : { ok: false, err: 'aun no consultado' };
     }
-    res.status(200).json({ ok: true, parser: 'v15', hist: histInfo, kv: KV_ERR || 'ok', count: out.length, window: { from, to }, oddsEnabled: !!oddsKey, oddsLeft: ODDS_LEFT, statsEnabled: !!process.env.FUTPYTHON_API_KEY, afEnabled: !!afKey, predictions: out, generated: new Date().toISOString(), errors: FD_ERRS.concat(AF_ERRS) });
+    res.status(200).json({ ok: true, parser: 'v14', hist: histInfo, kv: KV_ERR || 'ok', count: out.length, window: { from, to }, oddsEnabled: !!oddsKey, oddsLeft: ODDS_LEFT, statsEnabled: !!process.env.FUTPYTHON_API_KEY, predictions: out, generated: new Date().toISOString() });
   } catch (e) {
     res.status(500).json({ ok: false, error: String(e.message || e) });
   }
