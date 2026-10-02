@@ -60,6 +60,11 @@ async function kvLoad(now) {
 }
 const RHO = -0.06;
 const MARKET_W = 0.4;
+// Constante de decaimiento (días) del peso de cada partido: peso = exp(-días / DECAY_D).
+// Antes era 28 (peso efectivo de ~3-4 partidos por equipo => todo salía n=3 y probabilidades planas).
+const DECAY_D = 60;
+// Cuántos partidos terminados recientes se guardan por competición para calcular ratings.
+const HIST_MAX = 200;
 
 function cors(res) {
   res.setHeader('Access-Control-Allow-Origin', '*');
@@ -120,7 +125,7 @@ function buildRatings(matches, nowMs) {
     const as = m.score && m.score.fullTime ? m.score.fullTime.away : null;
     if (hs == null || as == null) return;
     const t = new Date(m.utcDate).getTime();
-    const w = Math.exp(-((nowMs - t) / 86400000) / 28);
+    const w = Math.exp(-((nowMs - t) / 86400000) / DECAY_D);
     const hn = m.homeTeam.name, an = m.awayTeam.name;
     const H = T[hn] = T[hn] || { hg: 0, hga: 0, hn: 0, ag: 0, aga: 0, an: 0 };
     const A = T[an] = T[an] || { hg: 0, hga: 0, hn: 0, ag: 0, aga: 0, an: 0 };
@@ -216,13 +221,25 @@ async function fetchOdds(sport, key) {
     return list;
   } finally { clearTimeout(t); }
 }
+// Palabras genéricas que cambian entre fuentes ("CA Mineiro" vs "Atlético Mineiro", "RB Bragantino" vs "Red Bull Bragantino").
+const GENERIC = { fc: 1, sc: 1, ca: 1, cd: 1, ec: 1, rb: 1, cf: 1, ac: 1, as: 1, afc: 1, club: 1, clube: 1, de: 1, do: 1, da: 1 };
+function nameTokens(n) {
+  return String(n).split(' ').filter(function (w) { return w && !GENERIC[w]; });
+}
+function sameTeam(a, b) {
+  if (!a || !b) return false;
+  if (a.indexOf(b) !== -1 || b.indexOf(a) !== -1) return true;
+  const ta = nameTokens(a), tb = nameTokens(b);
+  if (!ta.length || !tb.length) return false;
+  const small = ta.length <= tb.length ? ta : tb;
+  const big = ta.length <= tb.length ? tb : ta;
+  return small.every(function (w) { return big.indexOf(w) !== -1; });
+}
 function findOdds(list, fh, fa) {
   if (!fh || !fa) return null;
   for (let i = 0; i < list.length; i++) {
     const e = list[i];
-    const mh = (fh.indexOf(e.nh) !== -1 || e.nh.indexOf(fh) !== -1);
-    const ma = (fa.indexOf(e.na) !== -1 || e.na.indexOf(fa) !== -1);
-    if (mh && ma) return e;
+    if (sameTeam(fh, e.nh) && sameTeam(fa, e.na)) return e;
   }
   return null;
 }
@@ -324,7 +341,7 @@ export default async function handler(req, res) {
       // Sin "limit": el orden por defecto es ascendente y limit podía traer los PRIMEROS partidos de la temporada.
       return fd('/competitions/' + cid + '/matches?status=FINISHED', token, 6000)
         .then(function (h) {
-          const ms = slimMatches((h.matches || []).slice().sort(function (a, b) { return (b.utcDate || '').localeCompare(a.utcDate || ''); }).slice(0, 100));
+          const ms = slimMatches((h.matches || []).slice().sort(function (a, b) { return (b.utcDate || '').localeCompare(a.utcDate || ''); }).slice(0, HIST_MAX));
           HIST[cid] = mkHist(ms, now, now);
           return kvSave('h:' + cid, { matches: ms });
         })
@@ -435,7 +452,7 @@ export default async function handler(req, res) {
       const e = HIST[cid];
       histInfo[compName[cid] || cid] = e ? (e.ok ? { ok: true, partidos: e.count } : { ok: false, err: e.err || 'sin datos' }) : { ok: false, err: 'aun no consultado' };
     }
-    res.status(200).json({ ok: true, parser: 'v14', hist: histInfo, kv: KV_ERR || 'ok', count: out.length, window: { from, to }, oddsEnabled: !!oddsKey, oddsLeft: ODDS_LEFT, statsEnabled: !!process.env.FUTPYTHON_API_KEY, predictions: out, generated: new Date().toISOString() });
+    res.status(200).json({ ok: true, parser: 'v15', hist: histInfo, kv: KV_ERR || 'ok', count: out.length, window: { from, to }, oddsEnabled: !!oddsKey, oddsLeft: ODDS_LEFT, statsEnabled: !!process.env.FUTPYTHON_API_KEY, predictions: out, generated: new Date().toISOString() });
   } catch (e) {
     res.status(500).json({ ok: false, error: String(e.message || e) });
   }
