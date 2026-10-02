@@ -5,7 +5,7 @@
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <meta name="theme-color" content="#00ff88">
 <link rel="manifest" href="/manifest.webmanifest">
-<title>⚽ FutPredict Pro v24</title>
+<title>⚽ FutPredict Pro v25</title>
 <style>
 *{margin:0;padding:0;box-sizing:border-box;font-family:Arial,sans-serif}
 :root{--p:#00ff88;--s:#00d4ff;--bg:#0a0e1a;--c:rgba(255,255,255,.05);--t:#fff;--t2:#a0a0b0;--d:#ff4757;--w:#ffa502}
@@ -71,7 +71,7 @@ h1{font-size:1.5rem;color:var(--p);text-align:center}
 </head>
 <body>
 <h1>⚽ FutPredict Pro</h1>
-<div class="sub">v24 · medición seria (Brier solo con muestra suficiente) + respaldo en la nube + histórico cuando falta muestra</div>
+<div class="sub">v25 · medición seria (Brier solo con muestra suficiente) + respaldo en la nube + histórico cuando falta muestra</div>
 <div class="st" id="st">⏳ Conectando...</div>
 
 <div class="tabs">
@@ -243,7 +243,7 @@ function statsBlock(m){
   if(m.stats){var s=m.stats;
     return '<div class="mk3"><div class="mi"><div class="ml">Tiros'+(m.stats.src==='histórico'?' (hist.)':'')+'</div><div class="mv">'+s.home.sh+'-'+s.away.sh+'</div></div><div class="mi"><div class="ml">A puerta</div><div class="mv">'+s.home.sot+'-'+s.away.sot+'</div></div><div class="mi"><div class="ml">Córners</div><div class="mv">'+s.home.cor+'-'+s.away.cor+'</div></div></div>'+
     '<div class="mk3"><div class="mi"><div class="ml">Faltas</div><div class="mv">'+s.home.fou+'-'+s.away.fou+'</div></div><div class="mi"><div class="ml">Amarillas</div><div class="mv">'+s.home.yc+'-'+s.away.yc+'</div></div><div class="mi"><div class="ml">xG</div><div class="mv">'+s.home.xg+'-'+s.away.xg+'</div></div></div>';}
-  return '<div class="mk3"><div class="mi"><div class="ml">Faltas</div><div class="mv">n/d</div></div><div class="mi"><div class="ml">Posesión</div><div class="mv">n/d</div></div><div class="mi"><div class="ml">Tarjetas</div><div class="mv">n/d</div></div></div>';
+  return '';
 }
 function render(){var tk=tkey();var list=ALL.filter(function(m){if(curL!=='all'&&m.league!==curL)return false;if(tk&&dateKey(m.time)!==tk)return false;
   if(CONF){if((m.sampleN||0)<4)return false;if(!m.odds&&!m.stats)return false;}
@@ -254,12 +254,12 @@ function render(){var tk=tkey();var list=ALL.filter(function(m){if(curL!=='all'&
     var mp=Math.max(pr.home,pr.draw,pr.away);
     var low=(m.sampleN||0)<4;
     h+='<div class="card'+(low?' dim':'')+'" onclick="openM('+m.id+')">'+
-      '<div class="li"><span>'+m.league+'</span><span class="'+(st==='in'?'lv':(st==='post'?'pp':'mt'))+'">'+(st==='in'?'🔴 EN VIVO':(st==='post'?'FINAL':(st==='postp'?'POSPUESTO':'🕐 '+fmtT(m.time)+((m.restHome!=null&&m.restAway!=null)?' · descanso '+m.restHome+'/'+m.restAway+'d':''))))+'</span></div>'+
+      '<div class="li"><span>'+m.league+'</span><span class="'+(st==='in'?'lv':(st==='post'?'pp':'mt'))+'">'+(st==='in'?'🔴 EN VIVO':(st==='post'?'FINAL':(st==='postp'?'POSPUESTO':'🕐 '+dateKey(m.time).slice(5)+' '+fmtT(m.time)+((m.restHome!=null&&m.restAway!=null)?' · descanso '+m.restHome+'/'+m.restAway+'d':''))))+'</span></div>'+
       '<div class="teams"><div class="tm"><div class="tn">'+m.home+'</div>'+formHTML(m.formHome)+'</div><div class="vs">'+((st==='post'&&m.score)?(m.score.home+'-'+m.score.away):'VS')+'</div><div class="tm"><div class="tn">'+m.away+'</div>'+formHTML(m.formAway)+'</div></div>';
-    if(st==='post'&&sv&&sv.rs){h+='<div class="pbox '+(sv.estado==='win'?'win':'loss')+'"><div class="ps">'+sv.rs+'</div><div class="pt">Pred: '+sv.score+' → '+(sv.estado==='win'?'✅ Acertada':'❌ Fallada')+(sv.clv!=null?' · CLV '+sv.clv+'%':'')+'</div></div>';}
+    if(st==='post'&&sv&&sv.rs){h+='<div class="pbox '+(sv.estado==='win'?'win':'loss')+'"><div class="ps">'+sv.rs+'</div><div class="pt">Pick: '+({home:'1',draw:'X',away:'2'}[sv.pred]||'?')+' → '+(sv.estado==='win'?'✅ Acertada':'❌ Fallada')+(sv.clv!=null?' · CLV '+sv.clv+'%':'')+'</div></div>';}
     else if(st==='post'){h+='<div class="pbox"><div class="ps">'+(m.score?(m.score.home+'-'+m.score.away):'?')+'</div><div class="pt">Final</div></div>';}
     else{var sc=sv?sv.score:(mk.top[0].h+'-'+mk.top[0].a);
-      h+='<div class="pbox"><div class="pm"><div class="ps">'+sc+(e.adj?' ✍️':'')+'</div><div class="pt">'+mt+'<br>@'+fairOdds(mp)+'</div></div></div>'+
+      h+='<div class="pbox"><div class="pm"><div class="ps">'+sc+(e.adj?' ✍️':'')+'</div><div class="pt">'+mt+'<br>cuota justa '+fairOdds(mp)+'</div></div></div>'+
       '<div class="probs"><div class="pi"><div class="pl">Local</div><div class="pb"><div class="pf" data-w="'+pr.home+'"></div></div><div class="pv">'+pr.home+'%</div></div><div class="pi"><div class="pl">Empate</div><div class="pb"><div class="pf" data-w="'+pr.draw+'"></div></div><div class="pv">'+pr.draw+'%</div></div><div class="pi"><div class="pl">Visit.</div><div class="pb"><div class="pf" data-w="'+pr.away+'"></div></div><div class="pv">'+pr.away+'%</div></div></div>'+
       '<div class="note">n='+m.sampleN+' partidos de referencia'+(low?' · ⚠️ muestra chica':'')+'</div>'+
       '<div class="mk"><div class="mi"><div class="ml">+1.5</div><div class="mv">'+mk.o15+'%</div></div><div class="mi"><div class="ml">+2.5</div><div class="mv">'+mk.o25+'%</div></div><div class="mi"><div class="ml">+3.5</div><div class="mv">'+mk.o35+'%</div></div><div class="mi"><div class="ml">BTTS</div><div class="mv">'+mk.bt+'%</div></div></div>'+
@@ -325,7 +325,9 @@ function exportCSV(){var SK={home:'h',draw:'d',away:'a'};var rows=[['liga','loca
   var csv=rows.map(function(r){return r.map(function(x){return '"'+String(x).replace(/"/g,'""')+'"';}).join(',');}).join('\n');
   var b=new Blob([csv],{type:'text/csv'});var a=document.createElement('a');a.href=URL.createObjectURL(b);a.download='futpredict_historial.csv';a.click();}
 function hist(){var p=Object.values(DB.preds);if(!p.length){$('hlist').innerHTML='<div class="note">📭 Sin registros.</div>';return;}
-  $('hlist').innerHTML=p.reverse().slice(0,60).map(function(x){return '<div class="hist"><div><b>'+x.home+' vs '+x.away+'</b><div style="font-size:.62rem;color:var(--t2)">'+x.league+' · Pred '+x.score+(x.rs?' · Real '+x.rs:'')+(x.clv!=null?' · CLV '+x.clv+'%':'')+'</div></div><span class="rb '+x.estado+'">'+(x.estado==='win'?'✅':(x.estado==='loss'?'❌':''))+'</span></div>';}).join('');}
+  var PK={home:'1 Local',draw:'X Empate',away:'2 Visita'};
+  function rl(rs){var o=outc(rs);return o[0]?'1':(o[1]?'X':'2');}
+  $('hlist').innerHTML=p.reverse().slice(0,60).map(function(x){return '<div class="hist"><div><b>'+x.home+' vs '+x.away+'</b><div style="font-size:.62rem;color:var(--t2)">'+x.league+' · Pick: '+(PK[x.pred]||'?')+(x.rs?' · Real '+x.rs+' ('+rl(x.rs)+')':'')+' · marcador prob. '+x.score+(x.clv!=null?' · CLV '+x.clv+'%':'')+'</div></div><span class="rb '+x.estado+'">'+(x.estado==='win'?'✅':(x.estado==='loss'?'❌':''))+'</span></div>';}).join('');}
 function tab(k,el){var b=document.querySelectorAll('.tb');for(var i=0;i<b.length;i++)b[i].classList.remove('on');el.classList.add('on');
   var p=document.querySelectorAll('.pane');for(var j=0;j<p.length;j++)p[j].classList.remove('on');$('pane-'+k).classList.add('on');if(k==='d')dash();if(k==='h')hist();}
 if(CONF)$('confBtn').classList.add('on');
