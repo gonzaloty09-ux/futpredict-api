@@ -5,7 +5,7 @@
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <meta name="theme-color" content="#00ff88">
 <link rel="manifest" href="/manifest.webmanifest">
-<title>⚽ FutPredict Pro v23</title>
+<title>⚽ FutPredict Pro v24</title>
 <style>
 *{margin:0;padding:0;box-sizing:border-box;font-family:Arial,sans-serif}
 :root{--p:#00ff88;--s:#00d4ff;--bg:#0a0e1a;--c:rgba(255,255,255,.05);--t:#fff;--t2:#a0a0b0;--d:#ff4757;--w:#ffa502}
@@ -71,7 +71,7 @@ h1{font-size:1.5rem;color:var(--p);text-align:center}
 </head>
 <body>
 <h1>⚽ FutPredict Pro</h1>
-<div class="sub">v23 · medición seria (Brier solo con muestra suficiente) + respaldo en la nube</div>
+<div class="sub">v24 · medición seria (Brier solo con muestra suficiente) + respaldo en la nube + histórico cuando falta muestra</div>
 <div class="st" id="st">⏳ Conectando...</div>
 
 <div class="tabs">
@@ -166,10 +166,28 @@ function enrichStats(){
     return fetch('api/stats?league='+encodeURIComponent(l)).then(function(r){return r.json();}).then(function(d){SCLIENT[l]=(d&&d.ok)?d.teams:null;}).catch(function(){SCLIENT[l]=null;});
   })).then(function(){
     var changed=false;
-    ALL.forEach(function(m){var agg=SCLIENT[m.league];if(!agg||m.stats)return;var h=findTeamC(agg,m.home),a=findTeamC(agg,m.away);if(h&&a){m.stats={home:h,away:a};changed=true;}});
+    ALL.forEach(function(m){var agg=SCLIENT[m.league];if(!agg||m.stats)return;var h=findTeamC(agg,m.home),a=findTeamC(agg,m.away);if(h&&a){m.stats={home:h,away:a,src:'temporada'};changed=true;}});
     if(changed){render();$('st').textContent=$('st').textContent+' · 📊 stats';}
+    histStats();
   });
   sofaStats();
+}
+var SHIST={};
+// Respaldo: equipos con menos de 2 partidos en la fuente de temporada actual se completan con el histórico multi-temporada.
+function histStats(){
+  var need={};
+  ALL.forEach(function(m){var st=normStatus(m.status);if(st!=='pre'&&st!=='in')return;if(m.stats)return;
+    var l=m.league;if(SHIST[l]===undefined)need[l]=1;});
+  var ls=Object.keys(need).slice(0,2);
+  if(!ls.length)return;
+  Promise.all(ls.map(function(l){
+    return fetch('api/statshist?league='+encodeURIComponent(l)).then(function(r){return r.json();}).then(function(d){SHIST[l]=(d&&d.ok)?d.teams:null;}).catch(function(){SHIST[l]=null;});
+  })).then(function(){
+    var changed=false;
+    ALL.forEach(function(m){if(m.stats)return;var agg=SHIST[m.league];if(!agg)return;
+      var h=findTeamC(agg,m.home),a=findTeamC(agg,m.away);if(h&&a){m.stats={home:h,away:a,src:'histórico'};changed=true;}});
+    if(changed){render();$('st').textContent=$('st').textContent+' · 🗄️ histórico';}
+  });
 }
 // Segunda fuente, no oficial: solo para partidos EN VIVO/FINAL que ya tienen marcador. Si falla, no pasa nada.
 function sofaStats(){
@@ -223,7 +241,7 @@ function setD(v,el){curD=v;var b=document.querySelectorAll('.row .btn');for(var 
 function tkey(){if(curD==='w')return null;var d=new Date();d.setDate(d.getDate()+curD);return d.getFullYear()+'-'+pad2(d.getMonth()+1)+'-'+pad2(d.getDate());}
 function statsBlock(m){
   if(m.stats){var s=m.stats;
-    return '<div class="mk3"><div class="mi"><div class="ml">Tiros</div><div class="mv">'+s.home.sh+'-'+s.away.sh+'</div></div><div class="mi"><div class="ml">A puerta</div><div class="mv">'+s.home.sot+'-'+s.away.sot+'</div></div><div class="mi"><div class="ml">Córners</div><div class="mv">'+s.home.cor+'-'+s.away.cor+'</div></div></div>'+
+    return '<div class="mk3"><div class="mi"><div class="ml">Tiros'+(m.stats.src==='histórico'?' (hist.)':'')+'</div><div class="mv">'+s.home.sh+'-'+s.away.sh+'</div></div><div class="mi"><div class="ml">A puerta</div><div class="mv">'+s.home.sot+'-'+s.away.sot+'</div></div><div class="mi"><div class="ml">Córners</div><div class="mv">'+s.home.cor+'-'+s.away.cor+'</div></div></div>'+
     '<div class="mk3"><div class="mi"><div class="ml">Faltas</div><div class="mv">'+s.home.fou+'-'+s.away.fou+'</div></div><div class="mi"><div class="ml">Amarillas</div><div class="mv">'+s.home.yc+'-'+s.away.yc+'</div></div><div class="mi"><div class="ml">xG</div><div class="mv">'+s.home.xg+'-'+s.away.xg+'</div></div></div>';}
   return '<div class="mk3"><div class="mi"><div class="ml">Faltas</div><div class="mv">n/d</div></div><div class="mi"><div class="ml">Posesión</div><div class="mv">n/d</div></div><div class="mi"><div class="ml">Tarjetas</div><div class="mv">n/d</div></div></div>';
 }
@@ -257,13 +275,13 @@ function setAdj(id,mode){var a={h:1,a:1};if(mode==='h')a.h=0.9;if(mode==='a')a.a
 function openM(id){var m=null;for(var i=0;i<ALL.length;i++){if(String(ALL[i].id)===String(id)){m=ALL[i];break;}}if(!m)return;var e=effL(m);var mk=markets(e.h,e.a);var pr=dispProbs(m);
   var mt=pr.home>=pr.draw&&pr.home>=pr.away?'Victoria Local':(pr.away>=pr.home&&pr.away>=pr.draw?'Victoria Visitante':'Empate');
   var mp=Math.max(pr.home,pr.draw,pr.away);
-  var stSec=m.stats?('<div class="sec"><div class="stt">📊 Stats reales (promedio temporada, n='+m.stats.home.n+')</div>'+
+  var stSec=m.stats?('<div class="sec"><div class="stt">📊 Stats reales (promedio '+(m.stats.src==='histórico'?'histórico, varias temporadas':'temporada actual')+', n='+m.stats.home.n+')</div>'+
     '<div class="rw"><span class="rl">Tiros</span><span class="rv">'+m.stats.home.sh+' - '+m.stats.away.sh+'</span></div>'+
     '<div class="rw"><span class="rl">A puerta</span><span class="rv">'+m.stats.home.sot+' - '+m.stats.away.sot+'</span></div>'+
     '<div class="rw"><span class="rl">Córners</span><span class="rv">'+m.stats.home.cor+' - '+m.stats.away.cor+'</span></div>'+
     '<div class="rw"><span class="rl">Faltas</span><span class="rv">'+m.stats.home.fou+' - '+m.stats.away.fou+'</span></div>'+
     '<div class="rw"><span class="rl">Amarillas</span><span class="rv">'+m.stats.home.yc+' - '+m.stats.away.yc+'</span></div>'+
-    '<div class="rw"><span class="rl">xG</span><span class="rv">'+m.stats.home.xg+' - '+m.stats.away.xg+'</span></div></div>')
+    '<div class="rw"><span class="rl">xG</span><span class="rv">'+(m.stats.home.xg!=null?m.stats.home.xg+' - '+m.stats.away.xg:'n/d')+'</span></div></div>')
    :('<div class="sec"><div class="stt">⚠️ No disponible para esta liga</div><div class="rw"><span class="rl">Tiros/Córners/Faltas/xG</span><span class="rv">n/d — no los inventamos</span></div></div>');
   $('mb').innerHTML='<div class="stt" style="text-align:center;font-size:.95rem;color:var(--p)">📊 '+m.home+' vs '+m.away+'</div>'+
    '<div class="sec"><div class="stt">🔮 Predicción</div><div class="rw"><span class="rl">Marcador</span><span class="rv">'+mk.top[0].h+'-'+mk.top[0].a+'</span></div><div class="rw"><span class="rl">Resultado</span><span class="rv">'+mt+' ('+mp+'%)</span></div><div class="rw"><span class="rl">1/X/2</span><span class="rv">'+pr.home+'/'+pr.draw+'/'+pr.away+'</span></div><div class="rw"><span class="rl">λ (goles esp.)</span><span class="rv">'+e.h.toFixed(2)+' / '+e.a.toFixed(2)+(e.adj?' ✍️':'')+'</span></div><div class="rw"><span class="rl">Descanso L/V</span><span class="rv">'+((m.restHome!=null&&m.restAway!=null)?m.restHome+'d / '+m.restAway+'d':'—')+'</span></div><div class="rw"><span class="rl">Forma L/V</span><span class="rv">'+((m.formHome||[]).join('')||'—')+' / '+((m.formAway||[]).join('')||'—')+'</span></div></div>'+
