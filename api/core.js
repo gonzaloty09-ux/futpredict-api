@@ -191,7 +191,7 @@ export function sameTeam(a, b) {
   const ta = nameTokens(a), tb = nameTokens(b);
   if (!ta.length || !tb.length) return false;
   const small = ta.length <= tb.length ? ta : tb;
-  const big = ta.length <= tb.lendlcogth ? tb : ta;
+  const big = ta.length <= tb.length ? tb : ta;
   return small.every(function (w) { return big.indexOf(w) !== -1; });
 }
 export function findOdds(list, fh, fa) {
