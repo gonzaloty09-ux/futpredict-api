@@ -71,7 +71,7 @@ async function statsSeed(now) {
             cor: st(tm, 'wonCorners'), fou: st(tm, 'foulsCommitted'), yc: st(tm, 'yellowCards'),
             sav: st(tm, 'saves'), off: st(tm, 'offsides'), rc: st(tm, 'redCards')
           };
-          if (Object.keys(o).some(function (k) { return o[k] != null; })) { if (bumpStats(STATS, tm.team.displayName, o)) ch = true; }
+          if (Object.keys(o).some(function (k) { return o[k] != null; })) { if (bumpStats(STATS, tm.team.displayName, o, tm.homeAway === 'home')) ch = true; }
         });
         return ch;
       })
