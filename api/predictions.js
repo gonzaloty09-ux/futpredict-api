@@ -50,7 +50,7 @@ async function kvLoad(now) {
   } catch (e) { KV_ERR = String((e && e.message) || e); }
 }
 async function statsSeed(now) {
-  if (now - SEED_TS < 45000) return;
+  if (now - SEED_TS < 30000) return;
   SEED_TS = now;
   if (!SEEDED) SEEDED = {};
   if (Object.keys(SEEDED).length > 2000) SEEDED = {};
@@ -67,7 +67,7 @@ async function statsSeed(now) {
     if (ua !== ub) return ub - ua;
     return (b.utcDate || '').localeCompare(a.utcDate || '');
   });
-  const list = cands.slice(0, 8);
+  const list = cands.slice(0, 16);
   if (!list.length) return;
   let ch = false;
   await Promise.all(list.map(function (m) {
