@@ -1,5 +1,7 @@
 const API = 'https://api.football-data.org/v4';
 const ODDS_API = 'https://api.the-odds-api.com/v4';
+export const maxDuration = 20;
+import { espnMatches, sameFixture, espnRefresh, espnRestore, espnHistFeeds, espnInfo } from './espn.js';
 const cache = { data: null, ts: 0, key: '' };
 let FD_ERRS = [];
 const HIST = {};
@@ -52,6 +54,8 @@ async function kvLoad(now) {
       } else if (r.k.indexOf('o:') === 0 && v && v.list) {
         const sp = r.k.slice(2);
         if (!ODDS[sp] || ODDS[sp].ts < ms) ODDS[sp] = { list: v.list, ts: ms };
+      } else if (r.k.indexOf('e:espn:') === 0 && v && v.fin) {
+        espnRestore(r.k.slice(7), v, ms);
       } else if (r.k === 'm:left' && v && v.left != null && ms > ODDS_LEFT_TS) {
         ODDS_LEFT = Number(v.left); ODDS_LEFT_TS = ms;
       }
@@ -81,6 +85,11 @@ function normName(s) {
 }
 function mapLeague(name) {
   const n = String(name).toLowerCase();
+  // Ligas "2" que no tienen cuotas propias: evita gastar créditos de The Odds API con claves equivocadas.
+  if (n.indexOf('bundesliga 2') !== -1 || n.indexOf('2. bundesliga') !== -1) return null;
+  if (n.indexOf('serie b') !== -1 || n.indexOf('série b') !== -1) return null;
+  if (n.indexOf('ligue 2') !== -1) return null;
+  if (n.indexOf('laliga 2') !== -1) return null;
   if (n.indexOf('premier league') !== -1) return 'soccer_epl';
   if (n.indexOf('primera division') !== -1 || n.indexOf('la liga') !== -1) return 'soccer_spain_la_liga';
   if (n.indexOf('serie a') !== -1) return 'soccer_italy_serie_a';
@@ -100,6 +109,7 @@ function mapLeague(name) {
   // Sin confirmar en vivo: si una liga no trae cuotas, revisar que esta clave coincida con el listado real de The Odds API.
   return null;
 }
+
 function factorial(n) { let r = 1; for (let i = 2; i <= n; i++) r *= i; return r; }
 function poisson(l, k) { return (Math.pow(l, k) * Math.exp(-l)) / factorial(k); }
 function tau(h, a, hL, aL, rho) {
@@ -280,12 +290,30 @@ export default async function handler(req, res) {
       const arr2 = Object.values(map);
       if (arr2.length) { cache.data = arr2; cache.ts = now; cache.key = key; }
     }
+    if (!cache.data) cache.data = [];
 
-    if (!cache.data || !cache.data.length) {
+    await kvLoad(now);
+
+    // ---- Fuente extra (gratis): ESPN, scoreboard por liga ----
+    await espnRefresh(now, kvSave);
+
+    // Historia por liga ESPN → ratings locales (misma mecánica que las ligas de football-data)
+    espnHistFeeds().forEach(function (f) {
+      if (HIST[f.cid] && HIST[f.cid].ok && now - HIST[f.cid].ts < 15 * 60 * 1000) return;
+      HIST[f.cid] = mkHist(slimMatches(f.fin), now, now);
+    });
+
+    // Mezclar football-data + ESPN, sin duplicar el mismo partido (mismo día y equipos equivalentes).
+    const esM = espnMatches().filter(function (em) {
+      return !cache.data.some(function (f) { return sameFixture(f, em); });
+    });
+    const DATA = cache.data.concat(esM);
+
+    if (!DATA.length) {
       return res.status(200).json({ ok: true, count: 0, window: { from, to }, oddsEnabled: !!oddsKey, statsEnabled: !!process.env.FUTPYTHON_API_KEY, predictions: [], generated: new Date().toISOString(), errors: FD_ERRS, note: 'cargando, volvé a abrir en unos segundos' });
     }
 
-    const finished = cache.data.filter(function (m) { return !isUpcoming(m.status); });
+    const finished = DATA.filter(function (m) { return !isUpcoming(m.status); });
     const FB = buildRatings(finished, now);
 
     function buildTeamFin() {
@@ -319,14 +347,15 @@ export default async function handler(req, res) {
 
     const comps = {};
     const upcomingComps = {};
-    cache.data.forEach(function (m) {
+    DATA.forEach(function (m) {
       comps[m.competition.id] = true;
       if (isUpcoming(m.status)) upcomingComps[m.competition.id] = true;
     });
-    await kvLoad(now);
     const upCount = {};
-    cache.data.forEach(function (m) { if (isUpcoming(m.status)) upCount[m.competition.id] = (upCount[m.competition.id] || 0) + 1; });
+    DATA.forEach(function (m) { if (isUpcoming(m.status)) upCount[m.competition.id] = (upCount[m.competition.id] || 0) + 1; });
     const missing = Object.keys(comps).filter(function (cid) {
+      // Las ligas ESPN ya tienen su historia construida arriba; nunca van a football-data.
+      if (String(cid).indexOf('espn:') === 0) return false;
       const e = HIST[cid];
       const ttl = (e && e.ok) ? 3 * 60 * 60 * 1000 : 60 * 1000;
       return !e || now - e.ts > ttl;
@@ -349,7 +378,7 @@ export default async function handler(req, res) {
     }));
 
     const out = [];
-    cache.data.forEach(function (m) {
+    DATA.forEach(function (m) {
       const tMs = new Date(m.utcDate).getTime();
       if (tMs < fromMs) return;
       const hn = m.homeTeam.name, an = m.awayTeam.name;
@@ -373,7 +402,7 @@ export default async function handler(req, res) {
         score: m.score && m.score.fullTime ? { home: m.score.fullTime.home, away: m.score.fullTime.away } : null,
         probs: bp.probs, modelProbs: bp.probs, main: '', hL: +hL.toFixed(2), aL: +aL.toFixed(2), sampleN: Math.round(sampleN),
         restHome: rH, restAway: rA,
-        formHome: formOf(hn), formAway: formOf(an),
+        formHome: (formOf(hn).length ? formOf(hn) : (m.formHome || [])), formAway: (formOf(an).length ? formOf(an) : (m.formAway || [])),
         odds: null, value: [], stats: null
       });
     });
@@ -446,13 +475,13 @@ export default async function handler(req, res) {
     });
     out.sort(function (a, b) { return (a.time || '').localeCompare(b.time || ''); });
     const compName = {};
-    cache.data.forEach(function (m) { compName[m.competition.id] = m.competition.name; });
+    DATA.forEach(function (m) { compName[m.competition.id] = m.competition.name; });
     const histInfo = {};
     for (const cid in comps) {
       const e = HIST[cid];
       histInfo[compName[cid] || cid] = e ? (e.ok ? { ok: true, partidos: e.count } : { ok: false, err: e.err || 'sin datos' }) : { ok: false, err: 'aun no consultado' };
     }
-    res.status(200).json({ ok: true, parser: 'v15', hist: histInfo, kv: KV_ERR || 'ok', count: out.length, window: { from, to }, oddsEnabled: !!oddsKey, oddsLeft: ODDS_LEFT, statsEnabled: !!process.env.FUTPYTHON_API_KEY, predictions: out, generated: new Date().toISOString() });
+    res.status(200).json({ ok: true, parser: 'v16', hist: histInfo, kv: KV_ERR || 'ok', count: out.length, window: { from, to }, oddsEnabled: !!oddsKey, oddsLeft: ODDS_LEFT, statsEnabled: !!process.env.FUTPYTHON_API_KEY, espn: espnInfo(), predictions: out, generated: new Date().toISOString() });
   } catch (e) {
     res.status(500).json({ ok: false, error: String(e.message || e) });
   }
