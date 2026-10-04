@@ -22,7 +22,7 @@ async function kvSave(k, v) {
   try { await dbq('insert into kv (k, v, ts) values ($1, $2::jsonb, now()) on conflict (k) do update set v = excluded.v, ts = now()', [k, JSON.stringify(v)], 3000); } catch (e) { KV_ERR = String((e && e.message) || e); }
 }
 async function kvLoad(now) {
-  if (now - KV_LOADED < 60000) return;
+  if (now - KV_LOADED < 15000) return;
   KV_LOADED = now;
   try {
     if (!KV_READY) { await dbq('create table if not exists kv (k text primary key, v jsonb, ts timestamptz default now())'); KV_READY = true; }
@@ -42,7 +42,8 @@ async function kvLoad(now) {
       } else if (r.k === 'es:stats' && v && typeof v === 'object') {
         Object.keys(v).forEach(function (t) { if (!STATS[t] || (v[t] && (v[t].n || 0) >= (STATS[t].n || 0))) STATS[t] = v[t]; });
       } else if (r.k === 'es:seeded' && v && typeof v === 'object') {
-        if (!SEEDED || Object.keys(v).length > Object.keys(SEEDED).length) SEEDED = v;
+        // Union de claves: las instancias colaboran, nunca se pisan el progreso.
+        SEEDED = Object.assign(SEEDED || {}, v);
       } else if (r.k === 'm:left' && v && v.left != null && ms > ODDS_LEFT_TS) {
         ODDS_LEFT = Number(v.left); ODDS_LEFT_TS = ms;
       }
@@ -53,7 +54,7 @@ async function statsSeed(now) {
   if (now - SEED_TS < 20000) return;
   SEED_TS = now;
   if (!SEEDED) SEEDED = {};
-  if (Object.keys(SEEDED).length > 4000) SEEDED = {};
+  if (Object.keys(SEEDED).length > 6000) SEEDED = {};
   const colecta = function (ev) {
     const c = new AbortController(); const t = setTimeout(function () { c.abort(); }, 6000);
     return fetch('https://site.api.espn.com/apis/site/v2/sports/soccer/' + ev.path, { signal: c.signal })
