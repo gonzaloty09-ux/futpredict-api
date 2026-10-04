@@ -35,11 +35,43 @@ async function ensure() {
 function js(x) { return x == null ? null : JSON.stringify(x); }
 function pj(x) { if (typeof x === 'string') { try { return JSON.parse(x); } catch (e) { return null; } } return x; }
 
+// Validación/sanitización: el endpoint es público, no confiamos en el input.
+function cleanTxt(x, max) {
+  if (x == null) return null;
+  return String(x).replace(/[<>]/g, '').slice(0, max || 80);
+}
+function isScore(x) { return x == null || /^\d{1,2}-\d{1,2}$/.test(String(x)); }
+function isTri(x) { return x == null || (Array.isArray(x) && x.length === 3 && x.every(function (n) { return typeof n === 'number' && isFinite(n); })); }
+function isOdds(x) {
+  if (x == null) return true;
+  if (!x || typeof x !== 'object' || Array.isArray(x)) return false;
+  return ['h', 'd', 'a'].every(function (k) { return x[k] == null || (typeof x[k] === 'number' && isFinite(x[k])); });
+}
+function validPred(p) {
+  if (!p || typeof p.id !== 'string' || !p.id || p.id.length > 64) return false;
+  if (p.home != null && typeof p.home !== 'string') return false;
+  if (p.away != null && typeof p.away !== 'string') return false;
+  if (p.league != null && typeof p.league !== 'string') return false;
+  if (typeof p.pred !== 'string' || ['home', 'draw', 'away'].indexOf(p.pred) === -1) return false;
+  if (!isScore(p.score) || !isScore(p.rs)) return false;
+  if (['pend', 'win', 'loss'].indexOf(p.estado || 'pend') === -1) return false;
+  if (!isTri(p.pr) || !isTri(p.pm) || !isTri(p.pk)) return false;
+  if (!isOdds(p.oddsOpen) || !isOdds(p.oddsLast)) return false;
+  if (p.clv != null && (typeof p.clv !== 'number' || !isFinite(p.clv))) return false;
+  return true;
+}
+
 async function save(list) {
   const seen = {}; const rows = [];
   list.slice(0, 200).forEach(function (p) {
-    if (!p || !p.id || seen[p.id]) return;
-    seen[p.id] = 1; rows.push(p);
+    if (!validPred(p)) return;
+    if (seen[p.id]) return;
+    seen[p.id] = 1;
+    rows.push({
+      id: p.id, home: cleanTxt(p.home), away: cleanTxt(p.away), league: cleanTxt(p.league),
+      pred: p.pred, score: p.score || null, pr: p.pr, pm: p.pm, pk: p.pk,
+      oddsOpen: p.oddsOpen, oddsLast: p.oddsLast, estado: p.estado || 'pend', rs: p.rs || null, clv: p.clv
+    });
   });
   const chunks = [];
   for (let i = 0; i < rows.length; i += 40) chunks.push(rows.slice(i, i + 40));
