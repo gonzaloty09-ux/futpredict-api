@@ -1,7 +1,7 @@
 export const maxDuration = 20;
 import { dbq, slimMatches, mkHist, buildRatings, buildProbs, invLambda, normName, mapLeague, fd, fetchOdds, findOdds, isUpcoming, cors, cl } from './core.js';
 import { espnMatches, sameFixture, espnRefresh, espnRestore, espnHistFeeds, espnInfo, espnAggs, buildAggMap, compactAgg } from './espn.js';
-import { computeElo, eloLambda, buildH2H, h2hOf, leagueWeights, statPreds, bumpStats, bumpAllowed } from './pro.js';
+import { computeElo, eloLambda, buildH2H, h2hOf, leagueWeights, statPreds, bumpStats, bumpAllowed, perfFactor } from './pro.js';
 
 const cache = { data: null, ts: 0, key: '' };
 let FD_ERRS = [];
@@ -76,6 +76,13 @@ async function statsSeed(now) {
         const st = function (team, name) { const x = (team.statistics || []).find(function (z) { return z.name === name; }); return x ? parseFloat(x.displayValue) : null; };
         let ch = false;
         const arr = [];
+        // Goles reales del partido (header) para medir sobre/sub-rendimiento vs xG estimado.
+        const goals = {};
+        try {
+          ((s.header || {}).competitions || []).forEach(function (cc) {
+            (cc.competitors || []).forEach(function (cp) { if (cp.id != null && cp.score != null) goals[String(cp.id)] = parseFloat(cp.score); });
+          });
+        } catch (e) {}
         s.boxscore.teams.forEach(function (tm) {
           if (!tm.team || !tm.team.displayName) return;
           const o = {
@@ -88,8 +95,16 @@ async function statsSeed(now) {
             apas: st(tm, 'accuratePasses'), acru: st(tm, 'accurateCrosses'), alon: st(tm, 'accurateLongBalls'),
             etac: st(tm, 'effectiveTackles')
           };
+          const my = goals[String(tm.team.id)];
+          if (my != null && isFinite(my)) o.gf = my;
+          // xG estimado propio (sin API externa): SoT ~0.25, tiro fuera ~0.04, penal ~0.79.
+          if (o.sot != null) {
+            const xg = 0.25 * o.sot + 0.04 * Math.max(0, (o.sh || 0) - o.sot) + 0.79 * (o.pko || 0);
+            o.xg = Math.round(xg * 100) / 100;
+          }
           arr.push({ name: tm.team.displayName, o: o, home: tm.homeAway === 'home' });
         });
+        if (arr.length === 2 && arr[0].o.gf != null && arr[1].o.gf != null) { arr[0].o.ga = arr[1].o.gf; arr[1].o.ga = arr[0].o.gf; }
         arr.forEach(function (x) {
           if (Object.keys(x.o).some(function (k) { return x.o[k] != null; })) { if (bumpStats(STATS, x.name, x.o, x.home)) ch = true; }
         });
@@ -314,6 +329,10 @@ export default async function handler(req, res) {
       let hL = adj[0], aL = adj[1];
       // Instancias de copa (eliminacion directa): el juego tiende a ser mas cauteloso -> lambda algo menor.
       if (['uefa.champions', 'uefa.europa', 'uefa.conference', 'conmebol.libertadores', 'conmebol.sudamericana', 'copa.del.rey', 'fa.cup', 'efl.cup', 'dfb.pokal', 'coppa.italia', 'coupe.de.france', 'uefa.nations'].indexOf(String(m.competition.id).replace('espn:', '')) !== -1) { hL *= 0.95; aL *= 0.95; }
+      // Regresion por finalizacion (xG estimado propio): anotar muy por encima de las chances
+      // generadas es insostenible; ajuste suave ±12% por equipo.
+      hL = cl(hL * perfFactor(STATS, hn), 0.25, 3.6);
+      aL = cl(aL * perfFactor(STATS, an), 0.2, 3.2);
       const bp = buildProbs(hL, aL, sampleN, rhoOf(m.competition.id));
       const formOf = function (team) { return (H && H.form && H.form[team]) ? H.form[team] : []; };
       const cid = m.competition.id;
@@ -414,7 +433,7 @@ export default async function handler(req, res) {
       const e = HIST[cid];
       histInfo[compName[cid] || cid] = e ? (e.ok ? { ok: true, partidos: e.count } : { ok: false, err: e.err || 'sin datos' }) : { ok: false, err: 'aun no consultado' };
     }
-    res.status(200).json({ ok: true, parser: 'v19', hist: histInfo, kv: KV_ERR || 'ok', count: out.length, window: { from, to }, oddsEnabled: !!oddsKey, oddsLeft: ODDS_LEFT, espn: espnInfo(), statsTeams: Object.keys(STATS).length, predictions: out, generated: new Date().toISOString() });
+    res.status(200).json({ ok: true, parser: 'v20', hist: histInfo, kv: KV_ERR || 'ok', count: out.length, window: { from, to }, oddsEnabled: !!oddsKey, oddsLeft: ODDS_LEFT, espn: espnInfo(), statsTeams: Object.keys(STATS).length, predictions: out, generated: new Date().toISOString() });
   } catch (e) {
     res.status(500).json({ ok: false, error: String(e.message || e) });
   }
