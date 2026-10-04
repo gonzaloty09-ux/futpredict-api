@@ -38,7 +38,10 @@ export default async function handler(req, res) {
       return {
         sh: stat(t, 'totalShots'), sot: stat(t, 'shotsOnTarget'), pos: stat(t, 'possessionPct'),
         cor: stat(t, 'wonCorners'), fou: stat(t, 'foulsCommitted'), yc: stat(t, 'yellowCards'),
-        rc: stat(t, 'redCards'), sav: stat(t, 'saves'), off: stat(t, 'offsides')
+        rc: stat(t, 'redCards'), sav: stat(t, 'saves'), off: stat(t, 'offsides'),
+        blo: stat(t, 'blockedShots'), pas: stat(t, 'totalPasses'), cru: stat(t, 'totalCrosses'),
+        lon: stat(t, 'totalLongBalls'), tac: stat(t, 'totalTackles'), int: stat(t, 'interceptions'),
+        cle: stat(t, 'totalClearance')
       };
     };
     const teams = (s.boxscore && s.boxscore.teams) || [];

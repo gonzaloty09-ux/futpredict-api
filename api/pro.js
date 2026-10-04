@@ -76,7 +76,9 @@ export async function leagueWeights(dbq, now) {
 // ---- Predicción de estadísticas desde promedios reales colectados ----
 export const SPK = [
   ['sh', 'Tiros'], ['sot', 'Tiros a puerta'], ['cor', 'Córners'], ['fou', 'Faltas'],
-  ['yc', 'Amarillas'], ['sav', 'Salvadas (ARQ)'], ['off', 'Fueras de juego'], ['rc', 'Rojas']
+  ['yc', 'Amarillas'], ['sav', 'Salvadas (ARQ)'], ['off', 'Fueras de juego'], ['rc', 'Rojas'],
+  ['blo', 'Tiros bloqueados'], ['pas', 'Pases'], ['cru', 'Centros'], ['lon', 'Balones largos'],
+  ['tac', 'Entradas'], ['int', 'Intercepciones'], ['cle', 'Despejes']
 ];
 const ROLL = 12;
 
