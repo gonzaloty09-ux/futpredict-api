@@ -53,7 +53,55 @@ async function statsSeed(now) {
   if (now - SEED_TS < 30000) return;
   SEED_TS = now;
   if (!SEEDED) SEEDED = {};
-  if (Object.keys(SEEDED).length > 2000) SEEDED = {};
+  if (Object.keys(SEEDED).length > 4000) SEEDED = {};
+  const colecta = function (ev) {
+    const c = new AbortController(); const t = setTimeout(function () { c.abort(); }, 6000);
+    return fetch('https://site.api.espn.com/apis/site/v2/sports/soccer/' + ev.path, { signal: c.signal })
+      .then(function (r) { return r.ok ? r.json() : null; })
+      .then(function (s) {
+        clearTimeout(t);
+        if (!s || !s.boxscore || !s.boxscore.teams) return false;
+        const st = function (team, name) { const x = (team.statistics || []).find(function (z) { return z.name === name; }); return x ? parseFloat(x.displayValue) : null; };
+        let ch = false;
+        s.boxscore.teams.forEach(function (tm) {
+          if (!tm.team || !tm.team.displayName) return;
+          const o = {
+            sh: st(tm, 'totalShots'), sot: st(tm, 'shotsOnTarget'), pos: st(tm, 'possessionPct'),
+            cor: st(tm, 'wonCorners'), fou: st(tm, 'foulsCommitted'), yc: st(tm, 'yellowCards'),
+            sav: st(tm, 'saves'), off: st(tm, 'offsides'), rc: st(tm, 'redCards')
+          };
+          if (Object.keys(o).some(function (k) { return o[k] != null; })) { if (bumpStats(STATS, tm.team.displayName, o)) ch = true; }
+        });
+        return ch;
+      })
+      .catch(function () { clearTimeout(t); return false; });
+  };
+
+  // Fase 1: partidos proximos con algun equipo sin datos -> colectar los ultimos 5 de cada uno
+  // (el summary del proximo expone los IDs de esos 10 partidos; cada boxscore aporta stats de 2 equipos).
+  const necesita = function (nm) { const s = STATS[nm]; return !s || (s.sh || []).length < 5; };
+  const up = espnMatches()
+    .filter(function (m) { return (m.status === 'SCHEDULED') && (necesita(m.homeTeam.name) || necesita(m.awayTeam.name)); })
+    .slice(0, 2);
+  for (const m of up) {
+    if (SEEDED['L5:' + m.id]) continue;
+    SEEDED['L5:' + m.id] = 1;
+    const code = String(m.competition.id).slice(5);
+    const sum = await fetch('https://site.api.espn.com/apis/site/v2/sports/soccer/' + code + '/summary?event=' + String(m.id).slice(5)).then(function (x) { return x.ok ? x.json() : null; }).catch(function () { return null; });
+    if (!sum || !sum.lastFiveGames) continue;
+    const ids = [];
+    sum.lastFiveGames.forEach(function (e) {
+      (e.events || []).forEach(function (ev) { if (ev.id && ids.indexOf(String(ev.id)) === -1) ids.push(String(ev.id)); });
+    });
+    await Promise.all(ids.slice(0, 10).map(function (gid) {
+      if (SEEDED['g:' + gid]) return Promise.resolve();
+      SEEDED['g:' + gid] = 1;
+      return colecta({ path: code + '/summary?event=' + gid });
+    }));
+    await kvSave('es:stats', STATS); await kvSave('es:seeded', SEEDED);
+  }
+
+  // Fase 2: partidos finalizados directamente (llenado general).
   const cands = espnMatches()
     .filter(function (m) { return m.status === 'FINISHED' && m.score && m.score.fullTime && m.score.fullTime.home != null && !SEEDED[m.id]; });
   const upTeams = {};
@@ -67,30 +115,13 @@ async function statsSeed(now) {
     if (ua !== ub) return ub - ua;
     return (b.utcDate || '').localeCompare(a.utcDate || '');
   });
-  const list = cands.slice(0, 16);
+  const list = cands.slice(0, 8);
   if (!list.length) return;
   let ch = false;
   await Promise.all(list.map(function (m) {
     const code = String(m.competition.id).slice(5), ev = String(m.id).slice(5);
-    const c = new AbortController(); const t = setTimeout(function () { c.abort(); }, 6000);
-    return fetch('https://site.api.espn.com/apis/site/v2/sports/soccer/' + code + '/summary?event=' + ev, { signal: c.signal })
-      .then(function (r) { return r.ok ? r.json() : null; })
-      .then(function (s) {
-        clearTimeout(t);
-        SEEDED[m.id] = 1;
-        if (!s || !s.boxscore || !s.boxscore.teams) return;
-        const st = function (team, name) { const x = (team.statistics || []).find(function (z) { return z.name === name; }); return x ? parseFloat(x.displayValue) : null; };
-        s.boxscore.teams.forEach(function (tm) {
-          if (!tm.team || !tm.team.displayName) return;
-          const o = {
-            sh: st(tm, 'totalShots'), sot: st(tm, 'shotsOnTarget'), pos: st(tm, 'possessionPct'),
-            cor: st(tm, 'wonCorners'), fou: st(tm, 'foulsCommitted'), yc: st(tm, 'yellowCards'),
-            sav: st(tm, 'saves'), off: st(tm, 'offsides'), rc: st(tm, 'redCards')
-          };
-          if (Object.keys(o).some(function (k) { return o[k] != null; })) { if (bumpStats(STATS, tm.team.displayName, o)) ch = true; }
-        });
-      })
-      .catch(function () { clearTimeout(t); });
+    SEEDED[m.id] = 1;
+    return colecta({ path: code + '/summary?event=' + ev }).then(function (c) { if (c) ch = true; });
   }));
   if (ch) { await kvSave('es:stats', STATS); await kvSave('es:seeded', SEEDED); }
 }
