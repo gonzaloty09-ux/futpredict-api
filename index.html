@@ -209,7 +209,7 @@ function sync(){var ch=false;var SK={home:'h',draw:'d',away:'a'};
         if(!q.pk&&m.marketProbs){q.pk=tri(m.marketProbs);ch=true;DIRTY[k]=1;}}
     }
     if(st==='post'&&m.score&&DB.preds[k]&&DB.preds[k].estado==='pend'){var p=DB.preds[k];p.rs=m.score.home+'-'+m.score.away;var real=m.score.home>m.score.away?'home':(m.score.home<m.score.away?'away':'draw');p.estado=(p.pred===real)?'win':'loss';
-      if(p.oddsOpen&&p.oddsLast){var o=p.oddsOpen[SK[p.pred]],c2=p.oddsLast[SK[p.pred]];if(o&&c2)p.clv=+((o/c2-1)*100).toFixed(1);}
+      if(p.oddsOpen&&p.oddsLast){var o=p.oddsOpen[SK[p.pred]],c2=p.oddsLast[SK$p.pred]];if(o&&c2)p.clv=+((o/c2-1)*100).toFixed(1);}
       ch=true;DIRTY[k]=1;}
   });if(ch){save();push();}}
 function toggleConf(){CONF=!CONF;localStorage.setItem('fpconf',CONF?'1':'0');$('confBtn').classList.toggle('on',CONF);render();}
@@ -226,6 +226,25 @@ function statsBlock(m){
     '<div class="mk3"><div class="mi"><div class="ml">Faltas</div><div class="mv">'+s.home.fou+'-'+s.away.fou+'</div></div><div class="mi"><div class="ml">Amarillas</div><div class="mv">'+s.home.yc+'-'+s.away.yc+'</div></div><div class="mi"><div class="ml">xG</div><div class="mv">'+(s.home.xg!=null?s.home.xg:'n/d')+'-'+(s.away.xg!=null?s.away.xg:'n/d')+'</div></div></div>';}
   return '';
 }
+// Agregados reales por equipo desde el historial: [n, gf, ga, o25, btts, cs, hN, hGF, hGA, aN, aGF, aGA]
+function aggRows(nm,a){if(!a||a[0]<5)return '';return '<div class="stt" style="margin-top:6px">'+esc(nm)+' (últimos '+a[0]+')</div>'+
+ '<div class="rw"><span class="rl">Goles prom.</span><span class="rv">'+a[1]+' a favor · '+a[2]+' en contra</span></div>'+
+ '<div class="rw"><span class="rl">Como L / V (GF-GA)</span><span class="rv">'+(a[6]?(a[7]+'-'+a[8]):'—')+' / '+(a[9]?(a[10]+'-'+a[11]):'—')+'</span></div>'+
+ '<div class="rw"><span class="rl">Over 2.5 · BTTS</span><span class="rv">'+Math.round(a[3]/a[0]*100)+'% · '+Math.round(a[4]/a[0]*100)+'%</span></div>'+
+ '<div class="rw"><span class="rl">Vallas invictas</span><span class="rv">'+a[5]+'/'+a[0]+'</span></div>';}
+function mRw(l,a,b){return '<div class="rw"><span class="rl">'+l+'</span><span class="rv">'+(a==null?'-':a)+' - '+(b==null?'-':b)+'</span></div>';}
+function mseHTML(d){
+  var h='<div class="sec">';
+  if(d.started&&d.home&&d.home.sh!=null){
+    h+='<div class="stt">⚽ Stats del partido (ESPN)</div>'+
+    mRw('Tiros',d.home.sh,d.away.sh)+mRw('A puerta',d.home.sot,d.away.sot)+mRw('Posesión %',d.home.pos,d.away.pos)+
+    mRw('Córners',d.home.cor,d.away.cor)+mRw('Faltas',d.home.fou,d.away.fou)+mRw('Amarillas',d.home.yc,d.away.yc);}
+  (d.l5||[]).forEach(function(x){
+    h+='<div class="stt" style="margin-top:6px">🗓️ Últimos 5 · '+esc(x.team)+'</div>';
+    (x.events||[]).forEach(function(ev){h+='<div class="rw"><span class="rl">'+esc(ev.d)+' '+(ev.at?'en':'vs')+'</span><span class="rv">'+esc(ev.o)+' '+esc(ev.s)+' ('+esc(ev.r)+')</span></div>';});
+  });
+  return h+'</div>';
+}
 function render(){var tk=tkey();var list=ALL.filter(function(m){if(curL!=='all'&&m.league!==curL)return false;if(tk&&dateKey(m.time)!==tk)return false;
   if(CONF){if((m.sampleN||0)<4)return false;if(!m.odds&&!m.stats)return false;}
   return true;});
@@ -235,7 +254,7 @@ function render(){var tk=tkey();var list=ALL.filter(function(m){if(curL!=='all'&
     var mp=Math.max(pr.home,pr.draw,pr.away);
     var low=(m.sampleN||0)<4;
     h+='<div class="card'+(low?' dim':'')+'" onclick="openM('+m.id+')">'+
-      '<div class="li"><span>'+esc(m.league)+'</span><span class="'+(st==='in'?'lv':(st==='post'?'pp':'mt'))+'">'+(st==='in'?'🔴 EN VIVO':(st==='post'?'FINAL':(st==='postp'?'POSPUESTO':'🕐 '+dateKey(m.time).slice(5)+' '+fmtT(m.time)+((m.restHome!=null&&m.restAway!=null&&m.restHome<=14&&m.restAway<=14)?' · descanso '+m.restHome++'/'+m.restAway+'d''))+'</span></div>'+
+      '<div class="li"><span>'+esc(m.league)+'</span><span class="'+(st==='in'?'lv':(st==='post'?'pp':'mt'))+'">'+(st==='in'?'🔴 EN VIVO':(st==='post'?'FINAL':(st==='postp'?'POSPUESTO':'🕐 '+dateKey(m.time).slice(5)+' '+fmtT(m.time)+((m.restHome!=null&&m.restAway!=null&&m.restHome<=14&&m.restAway<=14)?' · descanso '+m.restHome+'/'+m.restAway+'d':''))))+'</span></div>'+
       '<div class="teams"><div class="tm"><div class="tn">'+esc(m.home)+'</div>'+formHTML(m.formHome)+'</div><div class="vs">'+((st==='post'&&m.score)?(m.score.home+'-'+m.score.away):'VS')+'</div><div class="tm"><div class="tn">'+esc(m.away)+'</div>'+formHTML(m.formAway)+'</div></div>';
     if(st==='post'&&sv&&sv.rs){h+='<div class="pbox '+(sv.estado==='win'?'win':'loss')+'"><div class="ps">'+sv.rs+'</div><div class="pt">Pick: '+({home:'1',draw:'X',away:'2'}[sv.pred]||'?')+' → '+(sv.estado==='win'?'✅ Acertada':'❌ Fallada')+(sv.clv!=null?' · CLV '+sv.clv+'%':'')+'</div></div>';}
     else if(st==='post'){h+='<div class="pbox"><div class="ps">'+(m.score?(m.score.home+'-'+m.score.away):'?')+'</div><div class="pt">Final</div></div>';}
@@ -256,6 +275,7 @@ function setAdj(id,mode){var a={h:1,a:1};if(mode==='h')a.h=0.9;if(mode==='a')a.a
 function openM(id){var m=null;for(var i=0;i<ALL.length;i++){if(String(ALL[i].id)===String(id)){m=ALL[i];break;}}if(!m)return;var e=effL(m);var mk=markets(e.h,e.a);var pr=dispProbs(m);
   var mt=pickOf(pr);
   var mp=Math.max(pr.home,pr.draw,pr.away);
+  var aggHtml=aggRows(m.home,m.aggH)+aggRows(m.away,m.aggA);
   var stSec=m.stats?('<div class="sec"><div class="stt">📊 Stats reales (promedio '+(m.stats.src==='histórico'?'histórico, varias temporadas':'temporada actual')+', n='+m.stats.home.n+')</div>'+
     '<div class="rw"><span class="rl">Tiros</span><span class="rv">'+m.stats.home.sh+' - '+m.stats.away.sh+'</span></div>'+
     '<div class="rw"><span class="rl">A puerta</span><span class="rv">'+m.stats.home.sot+' - '+m.stats.away.sot+'</span></div>'+
@@ -263,14 +283,25 @@ function openM(id){var m=null;for(var i=0;i<ALL.length;i++){if(String(ALL[i].id)
     '<div class="rw"><span class="rl">Faltas</span><span class="rv">'+m.stats.home.fou+' - '+m.stats.away.fou+'</span></div>'+
     '<div class="rw"><span class="rl">Amarillas</span><span class="rv">'+m.stats.home.yc+' - '+m.stats.away.yc+'</span></div>'+
     '<div class="rw"><span class="rl">xG</span><span class="rv">'+(m.stats.home.xg!=null?m.stats.home.xg+' - '+m.stats.away.xg:'n/d')+'</span></div></div>')
-   :('<div class="sec"><div class="stt">⚠️ No disponible para esta liga</div><div class="rw"><span class="rl">Tiros/Córners/Faltas/xG</span><span class="rv">n/d — no los inventamos</span></div></div>');
+   :(aggHtml?('<div class="sec"><div class="stt">📊 Promedios reales por equipo (del historial que colectamos)</div>'+aggHtml+'</div>')
+   :('<div class="sec"><div class="stt">⚠️ No disponible para esta liga</div><div class="rw"><span class="rl">Tiros/Córners/Faltas/xG</span><span class="rv">n/d — no los inventamos</span></div></div>'));
   $('mb').innerHTML='<div class="stt" style="text-align:center;font-size:.95rem;color:var(--p)">📊 '+esc(m.home)+' vs '+esc(m.away)+'</div>'+
    '<div class="sec"><div class="stt">🔮 Predicción</div><div class="rw"><span class="rl">Marcador</span><span class="rv">'+mk.top[0].h+'-'+mk.top[0].a+'</span></div><div class="rw"><span class="rl">Resultado</span><span class="rv">'+mt+' ('+mp+'%)</span></div><div class="rw"><span class="rl">1/X/2</span><span class="rv">'+pr.home+'/'+pr.draw+'/'+pr.away+'</span></div><div class="rw"><span class="rl">λ (goles esp.)</span><span class="rv">'+e.h.toFixed(2)+' / '+e.a.toFixed(2)+(e.adj?' ✍️':'')+'</span></div><div class="rw"><span class="rl">Descanso L/V</span><span class="rv">'+((m.restHome!=null&&m.restAway!=null)?m.restHome+'d / '+m.restAway+'d':'—')+'</span></div><div class="rw"><span class="rl">Forma L/V</span><span class="rv">'+((m.formHome||[]).join('')||'—')+' / '+((m.formAway||[]).join('')||'—')+'</span></div></div>'+
    '<div class="sec"><div class="stt">📈 Goles</div><div class="rw"><span class="rl">+1.5/+2.5/+3.5</span><span class="rv">'+mk.o15+'/'+mk.o25+'/'+mk.o35+'</span></div><div class="rw"><span class="rl">BTTS</span><span class="rv">'+mk.bt+'%</span></div><div class="rw"><span class="rl">Top marcadores</span><span class="rv">'+mk.top.map(function(s){return s.h+'-'+s.a;}).join(', ')+'</span></div></div>'+
    stSec+
+   '<div id="mse"></div>'+
    (m.odds?'<div class="sec"><div class="stt">💰 Mercado</div><div class="rw"><span class="rl">Cuota 1/X/2</span><span class="rv">'+fmtO(m.odds.h)+' / '+fmtO(m.odds.d)+' / '+fmtO(m.odds.a)+'</span></div><div class="rw"><span class="rl">Prob. mercado</span><span class="rv">'+(m.marketProbs?m.marketProbs.home+'/'+m.marketProbs.draw+'/'+m.marketProbs.away:'-')+'</span></div><div class="rw"><span class="rl">Modelo puro</span><span class="rv">'+(m.modelProbs?m.modelProbs.home+'/'+m.modelProbs.draw+'/'+m.modelProbs.away:'-')+'</span></div><div class="rw"><span class="rl">Value</span><span class="rv">'+(m.value&&m.value.length?m.value.map(function(v){return v.side+' +'+v.edge+'%';}).join(', '):'—')+'</span></div></div>':'')+
    '<div class="sec"><div class="stt">✍️ Ajuste manual (si sabés algo que el modelo no)</div><div class="row"><button class="btn" onclick="setAdj(\''+m.id+'\',\'h\')">−10% λ local</button><button class="btn" onclick="setAdj(\''+m.id+'\',\'a\')">−10% λ visita</button><button class="btn" onclick="setAdj(\''+m.id+'\',\'b\')">−10% ambos</button><button class="btn" onclick="setAdj(\''+m.id+'\',\'none\')">Quitar</button></div></div>';
-  $('modal').classList.add('on');}
+  $('modal').classList.add('on');
+  if(m.lcode&&String(m.id).indexOf('espn:')===0){
+    var eid=String(m.id).slice(5);
+    $('mse').innerHTML='<div class="sec"><div class="stt">⚽ Cargando stats del partido…</div></div>';
+    fetch('api/matchstats?league='+encodeURIComponent(m.lcode)+'&event='+eid).then(function(r){return r.json();}).then(function(d){
+      if(!d||!d.ok){$('mse').innerHTML='';return;}
+      $('mse').innerHTML=mseHTML(d);
+    }).catch(function(){$('mse').innerHTML='';});
+  }
+}
 function closeM(){$('modal').classList.remove('on');}
 $('modal').addEventListener('click',function(e){if(e.target.id==='modal')closeM();});
 function f3(x){return x==null?'--':x.toFixed(3);}
