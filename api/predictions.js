@@ -296,9 +296,12 @@ export default async function handler(req, res) {
       if (tMs < fromMs) return;
       const hn = m.homeTeam.name, an = m.awayTeam.name;
       const H = HIST[m.competition.id];
+      // Ratings cruzados: si el historial propio de la competencia tiene poca muestra por equipo
+      // (tipico en copas), se usa el pool global (incluye liga local) que es mas estable.
       let src = null;
-      if (H && H.ok && H.R[hn] && H.R[an]) src = H;
+      if (H && H.ok && H.R[hn] && H.R[an] && (H.R[hn].n + H.R[an].n) >= 8) src = H;
       else if (FB.R[hn] && FB.R[an]) src = { R: FB.R, lH: FB.lH, lA: FB.lA, form: {} };
+      else if (H && H.ok && H.R[hn] && H.R[an]) src = H;
       const DEF = { attH: 1, defH: 1, attA: 1, defA: 1, n: 0 };
       const home = src ? (src.R[hn] || DEF) : DEF;
       const away = src ? (src.R[an] || DEF) : DEF;
@@ -308,13 +311,15 @@ export default async function handler(req, res) {
       const aL0 = cl(lA * away.attA * home.defH * restFactor(rA), 0.2, 3.2);
       const sampleN = (home.n + away.n) / 2;
       const adj = eloLambda(hL0, aL0, EL[hn] || 1500, EL[an] || 1500, sampleN);
-      const hL = adj[0], aL = adj[1];
+      let hL = adj[0], aL = adj[1];
+      // Instancias de copa (eliminacion directa): el juego tiende a ser mas cauteloso -> lambda algo menor.
+      if (['uefa.champions', 'uefa.europa', 'uefa.conference', 'conmebol.libertadores', 'conmebol.sudamericana', 'copa.del.rey', 'fa.cup', 'efl.cup', 'dfb.pokal', 'coppa.italia', 'coupe.de.france', 'uefa.nations'].indexOf(String(m.competition.id).replace('espn:', '')) !== -1) { hL *= 0.95; aL *= 0.95; }
       const bp = buildProbs(hL, aL, sampleN, rhoOf(m.competition.id));
       const formOf = function (team) { return (H && H.form && H.form[team]) ? H.form[team] : []; };
       const cid = m.competition.id;
       const AG = AGGS[cid] || {};
       out.push({
-        id: m.id, home: hn, away: an,
+        id: m.id, cid: cid, home: hn, away: an,
         league: m.competition.name, time: m.utcDate, status: m.status,
         score: m.score && m.score.fullTime ? { home: m.score.fullTime.home, away: m.score.fullTime.away } : null,
         probs: bp.probs, modelProbs: bp.probs, main: '', hL: +hL.toFixed(2), aL: +aL.toFixed(2), sampleN: Math.round(sampleN),
@@ -409,7 +414,7 @@ export default async function handler(req, res) {
       const e = HIST[cid];
       histInfo[compName[cid] || cid] = e ? (e.ok ? { ok: true, partidos: e.count } : { ok: false, err: e.err || 'sin datos' }) : { ok: false, err: 'aun no consultado' };
     }
-    res.status(200).json({ ok: true, parser: 'v18', hist: histInfo, kv: KV_ERR || 'ok', count: out.length, window: { from, to }, oddsEnabled: !!oddsKey, oddsLeft: ODDS_LEFT, espn: espnInfo(), statsTeams: Object.keys(STATS).length, predictions: out, generated: new Date().toISOString() });
+    res.status(200).json({ ok: true, parser: 'v19', hist: histInfo, kv: KV_ERR || 'ok', count: out.length, window: { from, to }, oddsEnabled: !!oddsKey, oddsLeft: ODDS_LEFT, espn: espnInfo(), statsTeams: Object.keys(STATS).length, predictions: out, generated: new Date().toISOString() });
   } catch (e) {
     res.status(500).json({ ok: false, error: String(e.message || e) });
   }
