@@ -50,7 +50,7 @@ async function kvLoad(now) {
   } catch (e) { KV_ERR = String((e && e.message) || e); }
 }
 async function statsSeed(now) {
-  if (now - SEED_TS < 30000) return;
+  if (now - SEED_TS < 20000) return;
   SEED_TS = now;
   if (!SEEDED) SEEDED = {};
   if (Object.keys(SEEDED).length > 4000) SEEDED = {};
@@ -79,13 +79,14 @@ async function statsSeed(now) {
 
   // Fase 1: partidos proximos con algun equipo sin datos -> colectar los ultimos 5 de cada uno
   // (el summary del proximo expone los IDs de esos 10 partidos; cada boxscore aporta stats de 2 equipos).
-  const necesita = function (nm) { const s = STATS[nm]; return !s || (s.sh || []).length < 5; };
+  // Solo se marca como hecho si la colecta tuvo exito: los fallidos se reintentan en el proximo ciclo.
+  const necesita = function (nm) { const s = STATS[nm]; return !s || (s.sh || []).length < 3; };
   const up = espnMatches()
-    .filter(function (m) { return (m.status === 'SCHEDULED') && (necesita(m.homeTeam.name) || necesita(m.awayTeam.name)); })
-    .slice(0, 2);
+    .filter(function (m) { return (m.status === 'SCHEDULED' || m.status === 'IN_PLAY') && (necesita(m.homeTeam.name) || necesita(m.awayTeam.name)); })
+    .sort(function (a, b) { return (a.utcDate || '').localeCompare(b.utcDate || ''); })
+    .slice(0, 6);
   for (const m of up) {
     if (SEEDED['L5:' + m.id]) continue;
-    SEEDED['L5:' + m.id] = 1;
     const code = String(m.competition.id).slice(5);
     const sum = await fetch('https://site.api.espn.com/apis/site/v2/sports/soccer/' + code + '/summary?event=' + String(m.id).slice(5)).then(function (x) { return x.ok ? x.json() : null; }).catch(function () { return null; });
     if (!sum || !sum.lastFiveGames) continue;
@@ -93,11 +94,12 @@ async function statsSeed(now) {
     sum.lastFiveGames.forEach(function (e) {
       (e.events || []).forEach(function (ev) { if (ev.id && ids.indexOf(String(ev.id)) === -1) ids.push(String(ev.id)); });
     });
-    await Promise.all(ids.slice(0, 10).map(function (gid) {
-      if (SEEDED['g:' + gid]) return Promise.resolve();
-      SEEDED['g:' + gid] = 1;
-      return colecta({ path: code + '/summary?event=' + gid });
+    if (!ids.length) continue;
+    const res = await Promise.all(ids.slice(0, 10).map(function (gid) {
+      if (SEEDED['g:' + gid]) return Promise.resolve(false);
+      return colecta({ path: code + '/summary?event=' + gid }).then(function (ok) { if (ok) SEEDED['g:' + gid] = 1; return ok; });
     }));
+    if (res.some(function (x) { return x; })) SEEDED['L5:' + m.id] = 1;
     await kvSave('es:stats', STATS); await kvSave('es:seeded', SEEDED);
   }
 
@@ -115,7 +117,7 @@ async function statsSeed(now) {
     if (ua !== ub) return ub - ua;
     return (b.utcDate || '').localeCompare(a.utcDate || '');
   });
-  const list = cands.slice(0, 8);
+  const list = cands.slice(0, 12);
   if (!list.length) return;
   let ch = false;
   await Promise.all(list.map(function (m) {
