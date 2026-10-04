@@ -124,10 +124,11 @@ export function mkHist(ms, ts, now) {
   const rr = buildRatings(ms, now);
   return { R: rr.R, lH: rr.lH, lA: rr.lA, form: buildForm(ms), _matches: ms, ts: ts, ok: true, count: ms.length };
 }
-export function buildProbs(hL, aL, sampleN) {
+export function buildProbs(hL, aL, sampleN, rho) {
+  const R = rho != null ? rho : RHO;
   const maxG = 8; let tot = 0, hW = 0, d = 0, aW = 0; const sc = [];
   for (let h = 0; h <= maxG; h++) for (let a = 0; a <= maxG; a++) {
-    const p = poisson(hL, h) * poisson(aL, a) * tau(h, a, hL, aL, RHO);
+    const p = poisson(hL, h) * poisson(aL, a) * tau(h, a, hL, aL, R);
     tot += p; sc.push({ h: h, a: a, p: p / tot });
     if (h > a) hW += p; else if (h === a) d += p; else aW += p;
   }
