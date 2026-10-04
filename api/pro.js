@@ -78,7 +78,9 @@ export const SPK = [
   ['sh', 'Tiros'], ['sot', 'Tiros a puerta'], ['cor', 'Córners'], ['fou', 'Faltas'],
   ['yc', 'Amarillas'], ['sav', 'Salvadas (ARQ)'], ['off', 'Fueras de juego'], ['rc', 'Rojas'],
   ['blo', 'Tiros bloqueados'], ['pas', 'Pases'], ['cru', 'Centros'], ['lon', 'Balones largos'],
-  ['tac', 'Entradas'], ['int', 'Intercepciones'], ['cle', 'Despejes']
+  ['tac', 'Entradas'], ['int', 'Intercepciones'], ['cle', 'Despejes'],
+  ['pko', 'Penales'], ['pks', 'Penales rematados'], ['apas', 'Pases precisos'],
+  ['acru', 'Centros precisos'], ['alon', 'Balones largos precisos'], ['etac', 'Entradas efectivas']
 ];
 const ROLL = 12;
 
@@ -104,7 +106,27 @@ export function bumpStats(STATS, team, obs, isHome) {
   if (any) s.n = Math.max(s.n || 0, Math.min(ROLL, (s.sh || []).length));
   return any;
 }
+// Stats "permitidas": lo que los rivales le hicieron a este equipo (para ajustar por defensa rival).
+export function bumpAllowed(STATS, team, oppObs) {
+  const s = STATS[team] = STATS[team] || { n: 0 };
+  Object.keys(oppObs).forEach(function (k) {
+    const v = oppObs[k];
+    if (v == null || !isFinite(v)) return;
+    const kk = k + 'Ag';
+    if (!s[kk]) s[kk] = [];
+    s[kk].push(Math.round(v * 10) / 10);
+    if (s[kk].length > ROLL) s[kk] = s[kk].slice(-ROLL);
+  });
+}
 function avgA(a) { return a && a.length ? a.reduce(function (s, x) { return s + x; }, 0) / a.length : null; }
+function globalAvg(STATS, k) {
+  let sum = 0, cnt = 0;
+  Object.keys(STATS).forEach(function (t) {
+    const a = STATS[t][k];
+    if (a && a.length) { a.forEach(function (x) { sum += x; cnt++; }); }
+  });
+  return cnt >= 30 ? sum / cnt : null;
+}
 // Promedio ponderado por localía: 65% en su condición, 35% general (si hay 2+ muestras de la condición).
 function venueAvg(s, k, isHome) {
   const g = avgA(s[k]);
@@ -120,26 +142,29 @@ function nphi(z) {
   let p = d * t * (0.3193815 + t * (-0.3565638 + t * (1.781478 + t * (-1.821256 + t * 1.330274))));
   return z > 0 ? 1 - p : p;
 }
-// P(X > line) con X ~ Poisson(λ); para λ grandes usa aproximación normal.
-export function pOver(l, line) {
+// P(X > line) con X ~ BinomialNegativa(λ, r): permite sobre-dispersión (córners, faltas y tiros
+// varían más de lo que la Poisson asume). Para λ grandes usa aproximación normal con varianza NB.
+export function pOverNB(l, line, r) {
   if (l == null || l <= 0) return null;
-  if (l > 30) return 1 - nphi((line + 0.5 - l) / Math.sqrt(l));
+  const rr = r || 8;
+  if (l > 30) { const sd = Math.sqrt(l + l * l / rr); return 1 - nphi((line + 0.5 - l) / sd); }
+  const q = l / (l + rr);
   const k0 = Math.floor(line) + 1;
-  let cum = 0, term = Math.exp(-l);
-  for (let i = 0; i < k0; i++) { if (i > 0) term *= l / i; cum += term; }
+  let cum = 0, term = Math.pow(rr / (l + rr), rr);
+  for (let i = 0; i < k0; i++) { if (i > 0) term = term * ((i - 1 + rr) / i) * q; cum += term; }
   return Math.max(0, Math.min(1, 1 - cum));
 }
 function oneStat(name, lH, lA) {
   const lt = lH + lA;
   const line = Math.floor(lt) + 0.5;
-  const po = pOver(lt, line);
+  const po = pOverNB(lt, line, 8);
   if (po == null) return null;
   const pick = po >= 0.5 ? ('Más de ' + line) : ('Menos de ' + line);
   const risk = Math.round(100 - Math.max(po, 1 - po) * 100);
-  const sd = Math.sqrt(Math.max(lt, 0.5));
+  const sd = Math.sqrt(Math.max(lt + lt * lt / 8, 0.5));
   const r0 = Math.max(0, Math.floor(lt - 0.7 * sd)), r1 = Math.ceil(lt + 0.7 * sd);
   const lh = Math.floor(lH) + 0.5, la = Math.floor(lA) + 0.5;
-  const pho = pOver(lH, lh), pao = pOver(lA, la);
+  const pho = pOverNB(lH, lh, 8), pao = pOverNB(lA, la, 8);
   return {
     name: name, line: line, pick: pick, p: Math.round(Math.max(po, 1 - po) * 100), risk: risk,
     r0: r0, r1: r1,
@@ -165,8 +190,16 @@ export function statPreds(STATS, hn, an, espnMatch) {
   const out = [];
   SPK.forEach(function (p) {
     const k = p[0];
-    const aH = venueAvg(A, k, true), aA = venueAvg(B, k, false);
-    if (aH == null || aA == null) return;
+    const aH0 = venueAvg(A, k, true), aA0 = venueAvg(B, k, false);
+    if (aH0 == null || aA0 == null) return;
+    // Ajuste por el rival: según lo que la defensa del oponente permite en esa stat
+    // (promedio que le hacen) frente al promedio global. Factor suavizado y acotado.
+    const gAll = globalAvg(STATS, k);
+    const alB = gAll != null ? avgA(B[k + 'Ag']) : null;
+    const alA = gAll != null ? avgA(A[k + 'Ag']) : null;
+    const fB = alB != null ? Math.max(0.85, Math.min(1.2, alB / gAll)) : 1;
+    const fA = alA != null ? Math.max(0.85, Math.min(1.2, alA / gAll)) : 1;
+    const aH = aH0 * (1 + (fB - 1) * 0.7), aA = aA0 * (1 + (fA - 1) * 0.7);
     const r = oneStat(p[1], aH, aA);
     if (r) out.push(Object.assign({ k: k, n: n }, r, { risk: Math.min(85, r.risk + extraRisk), p: Math.max(15, r.p - extraRisk) }));
   });
