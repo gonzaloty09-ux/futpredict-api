@@ -54,7 +54,7 @@ async function statsSeed(now) {
   if (now - SEED_TS < 20000) return;
   SEED_TS = now;
   if (!SEEDED) SEEDED = {};
-  if (Object.keys(SEEDED).length > 6000) SEEDED = {};
+  if (Object.keys(SEEDED).length > 4000) SEEDED = {};
   const colecta = function (ev) {
     const c = new AbortController(); const t = setTimeout(function () { c.abort(); }, 6000);
     return fetch('https://site.api.espn.com/apis/site/v2/sports/soccer/' + ev.path, { signal: c.signal })
@@ -324,7 +324,7 @@ export default async function handler(req, res) {
       }
       out.forEach(function (p) {
         const s = mapLeague(p.league); if (!s || !ODDS[s]) return;
-        const o = findOdds(ODDS[s].list, normName(p.home), normName(p.awway || p.away));
+        const o = findOdds(ODDS[s].list, normName(p.home), normName(p.away));
         if (!o) return;
         if (o.ov && o.un) {
           const pOver = (1 / o.ov) / ((1 / o.ov) + (1 / o.un));
