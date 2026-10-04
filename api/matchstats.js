@@ -41,7 +41,9 @@ export default async function handler(req, res) {
         rc: stat(t, 'redCards'), sav: stat(t, 'saves'), off: stat(t, 'offsides'),
         blo: stat(t, 'blockedShots'), pas: stat(t, 'totalPasses'), cru: stat(t, 'totalCrosses'),
         lon: stat(t, 'totalLongBalls'), tac: stat(t, 'totalTackles'), int: stat(t, 'interceptions'),
-        cle: stat(t, 'totalClearance')
+        cle: stat(t, 'totalClearance'), pko: stat(t, 'penaltyKickGoals'), pks: stat(t, 'penaltyKickShots'),
+        apas: stat(t, 'accuratePasses'), acru: stat(t, 'accurateCrosses'), alon: stat(t, 'accurateLongBalls'),
+        etac: stat(t, 'effectiveTackles')
       };
     };
     const teams = (s.boxscore && s.boxscore.teams) || [];
