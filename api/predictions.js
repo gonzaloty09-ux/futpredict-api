@@ -2,16 +2,19 @@ const API = 'https://api.football-data.org/v4';
 const ODDS_API = 'https://api.the-odds-api.com/v4';
 export const maxDuration = 20;
 import { espnMatches, sameFixture, espnRefresh, espnRestore, espnHistFeeds, espnInfo, espnAggs, buildAggMap, compactAgg } from './espn.js';
+import { computeElo, eloLambda, buildH2H, h2hOf, leagueWeights, statPreds, bumpStats } from './pro.js';
 const cache = { data: null, ts: 0, key: '' };
 let FD_ERRS = [];
 const HIST = {};
 const ODDS = {};
+const STATS = {};      // promedios de estadísticas por equipo (tiros, córners...), de ESPN summary
+let SEEDED = null;     // eventos ESPN cuyo summary ya se colectó para STATS
+let SEED_TS = 0;
 let ODDS_LEFT = null;
 let ODDS_LEFT_TS = 0;
 let KV_READY = false;
 let KV_LOADED = 0;
 let KV_ERR = null;
-
 async function dbq(sql, params, ms) {
   const cs = process.env.DATABASE_URL || process.env.POSTGRES_URL;
   if (!cs) throw new Error('sin DATABASE_URL');
@@ -37,7 +40,6 @@ function mkHist(ms, ts, now) {
 async function kvSave(k, v) {
   try { await dbq('insert into kv (k, v, ts) values ($1, $2::jsonb, now()) on conflict (k) do update set v = excluded.v, ts = now()', [k, JSON.stringify(v)], 3000); } catch (e) { KV_ERR = String((e && e.message) || e); }
 }
-// Caché compartida entre instancias (historial y cuotas). Es opcional: si falla, todo sigue como antes.
 async function kvLoad(now) {
   if (now - KV_LOADED < 60000) return;
   KV_LOADED = now;
@@ -56,6 +58,10 @@ async function kvLoad(now) {
         if (!ODDS[sp] || ODDS[sp].ts < ms) ODDS[sp] = { list: v.list, ts: ms };
       } else if (r.k.indexOf('e:espn:') === 0 && v && v.fin) {
         espnRestore(r.k.slice(7), v, ms);
+      } else if (r.k === 'es:stats' && v && typeof v === 'object') {
+        Object.keys(v).forEach(function (t) { if (!STATS[t] || (v[t] && (v[t].n || 0) >= (STATS[t].n || 0))) STATS[t] = v[t]; });
+      } else if (r.k === 'es:seeded' && v && typeof v === 'object') {
+        if (!SEEDED || Object.keys(v).length > Object.keys(SEEDED).length) SEEDED = v;
       } else if (r.k === 'm:left' && v && v.left != null && ms > ODDS_LEFT_TS) {
         ODDS_LEFT = Number(v.left); ODDS_LEFT_TS = ms;
       }
@@ -64,12 +70,43 @@ async function kvLoad(now) {
 }
 const RHO = -0.06;
 const MARKET_W = 0.4;
-// Constante de decaimiento (días) del peso de cada partido: peso = exp(-días / DECAY_D).
-// Antes era 28 (peso efectivo de ~3-4 partidos por equipo => todo salía n=3 y probabilidades planas).
+async function statsSeed(now, kvSave) {
+  if (now - SEED_TS < 45000) return;
+  SEED_TS = now;
+  if (!SEEDED) SEEDED = {};
+  if (Object.keys(SEEDED).length > 2000) SEEDED = {};
+  const cands = espnMatches()
+    .filter(function (m) { return m.status === 'FINISHED' && m.score && m.score.fullTime && m.score.fullTime.home != null && !SEEDED[m.id]; })
+    .sort(function (a, b) { return (b.utcDate || '').localeCompare(a.utcDate || ''); })
+    .slice(0, 5);
+  if (!cands.length) return;
+  let ch = false;
+  await Promise.all(cands.map(function (m) {
+    const code = String(m.competition.id).slice(5), ev = String(m.id).slice(5);
+    const c = new AbortController(); const t = setTimeout(function () { c.abort(); }, 6000);
+    return fetch('https://site.api.espn.com/apis/site/v2/sports/soccer/' + code + '/summary?event=' + ev, { signal: c.signal })
+      .then(function (r) { return r.ok ? r.json() : null; })
+      .then(function (s) {
+        clearTimeout(t);
+        SEEDED[m.id] = 1;
+        if (!s || !s.boxscore || !s.boxscore.teams) return;
+        const st = function (team, name) { const x = (team.statistics || []).find(function (z) { return z.name === name; }); return x ? parseFloat(x.displayValue) : null; };
+        s.boxscore.teams.forEach(function (tm) {
+          if (!tm.team || !tm.team.displayName) return;
+          const o = {
+            sh: st(tm, 'totalShots'), sot: st(tm, 'shotsOnTarget'), pos: st(tm, 'possessionPct'),
+            cor: st(tm, 'wonCorners'), fou: st(tm, 'foulsCommitted'), yc: st(tm, 'yellowCards'),
+            sav: st(tm, 'saves'), off: st(tm, 'offsides'), rc: st(tm, 'redCards')
+          };
+          if (Object.keys(o).some(function (k) { return o[k] != null; })) { if (bumpStats(STATS, tm.team.displayName, o)) ch = true; }
+        });
+      })
+      .catch(function () { clearTimeout(t); });
+  }));
+  if (ch) { await kvSave('es:stats', STATS); await kvSave('es:seeded', SEEDED); }
+}
 const DECAY_D = 60;
-// Cuántos partidos terminados recientes se guardan por competición para calcular ratings.
 const HIST_MAX = 200;
-
 function cors(res) {
   res.setHeader('Access-Control-Allow-Origin', '*');
   res.setHeader('Access-Control-Allow-Methods', 'GET,OPTIONS');
@@ -85,7 +122,6 @@ function normName(s) {
 }
 function mapLeague(name) {
   const n = String(name).toLowerCase();
-  // Ligas "2" que no tienen cuotas propias: evita gastar créditos de The Odds API con claves equivocadas.
   if (n.indexOf('bundesliga 2') !== -1 || n.indexOf('2. bundesliga') !== -1) return null;
   if (n.indexOf('serie b') !== -1 || n.indexOf('série b') !== -1) return null;
   if (n.indexOf('ligue 2') !== -1) return null;
@@ -106,10 +142,8 @@ function mapLeague(name) {
   if (n.indexOf('mls') !== -1 || n.indexOf('major league soccer') !== -1) return 'soccer_usa_mls';
   if (n.indexOf('world cup') !== -1 || n.indexOf('mundial') !== -1) return 'soccer_fifa_world_cup';
   if (n.indexOf('euro') !== -1 && n.indexOf('championship') !== -1) return 'soccer_uefa_european_championship';
-  // Sin confirmar en vivo: si una liga no trae cuotas, revisar que esta clave coincida con el listado real de The Odds API.
   return null;
 }
-
 function factorial(n) { let r = 1; for (let i = 2; i <= n; i++) r *= i; return r; }
 function poisson(l, k) { return (Math.pow(l, k) * Math.exp(-l)) / factorial(k); }
 function tau(h, a, hL, aL, rho) {
@@ -140,7 +174,7 @@ function buildRatings(matches, nowMs) {
     const H = T[hn] = T[hn] || { hg: 0, hga: 0, hn: 0, ag: 0, aga: 0, an: 0 };
     const A = T[an] = T[an] || { hg: 0, hga: 0, hn: 0, ag: 0, aga: 0, an: 0 };
     H.hg += hs * w; H.hga += as * w; H.hn += w;
-    A.ag += as * w ; A.aga += hs * w; A.an += w;
+    A.ag += as * w; A.aga += hs * w; A.an += w;
     sh += hs * w; sa += as * w; sw += w;
   });
   const lH = sw ? sh / sw : 1.35, lA = sw ? sa / sw : 1.15;
@@ -186,7 +220,7 @@ function buildProbs(hL, aL, sampleN) {
   let pd = Math.round(b + (d / tot * 100 - b) * s);
   let pa = Math.round(b + (aW / tot * 100 - b) * s);
   if (ph + pd + pa !== 100) pa = 100 - ph - pd;
-  return { probs: {home: ph, draw: pd, away: pa }, top: sc.slice(0, 3) };
+  return { probs: { home: ph, draw: pd, away: pa }, top: sc.slice(0, 3) };
 }
 async function fd(path, token, ms) {
   ms = ms || 5000;
@@ -231,7 +265,6 @@ async function fetchOdds(sport, key) {
     return list;
   } finally { clearTimeout(t); }
 }
-// Palabras genéricas que cambian entre fuentes ("CA Mineiro" vs "Atlético Mineiro", "RB Bragantino" vs "Red Bull Bragantino").
 const GENERIC = { fc: 1, sc: 1, ca: 1, cd: 1, ec: 1, rb: 1, cf: 1, ac: 1, as: 1, afc: 1, club: 1, clube: 1, de: 1, do: 1, da: 1 };
 function nameTokens(n) {
   return String(n).split(' ').filter(function (w) { return w && !GENERIC[w]; });
@@ -257,7 +290,6 @@ function isUpcoming(status) {
   const s = (status || '').toUpperCase();
   return s.indexOf('FIN') !== 0 && s.indexOf('POST') !== 0;
 }
-
 export default async function handler(req, res) {
   cors(res);
   res.setHeader('Cache-Control', 's-maxage=60, stale-while-revalidate=300');
@@ -273,7 +305,6 @@ export default async function handler(req, res) {
     const to = new Date(base.getTime() + 6 * 86400000).toISOString().split('T')[0];
     const key = from + '_' + to;
     const fromMs = new Date(from + 'T00:00:00Z').getTime();
-
     if (!cache.data || cache.key !== key || now - cache.ts > 30 * 60 * 1000) {
       FD_ERRS = [];
       const grab = function (label) { return function (e) { FD_ERRS.push(label + ': ' + String((e && e.message) || e)); return []; }; };
@@ -281,7 +312,6 @@ export default async function handler(req, res) {
         fd('/matches?dateFrom=' + from + '&dateTo=' + to, token).then(function (r) { return r.matches || []; }).catch(grab('matches')),
         fd('/competitions/CL/matches?dateFrom=' + from + '&dateTo=' + to, token).then(function (r) { return r.matches || []; }).catch(grab('CL')),
         fd('/competitions/EL/matches?dateFrom=' + from + '&dateTo=' + to, token).then(function (r) { return r.matches || []; }).catch(grab('EL')),
-        // Competencias internacionales: solo entran si tu plan de football-data.org las incluye; si no, el catch las deja afuera sin romper nada.
         fd('/competitions/WC/matches?dateFrom=' + from + '&dateTo=' + to, token).then(function (r) { return r.matches || []; }).catch(grab('WC')),
         fd('/competitions/EC/matches?dateFrom=' + from + '&dateTo=' + to, token).then(function (r) { return r.matches || []; }).catch(grab('EC'))
       ]);
@@ -291,31 +321,26 @@ export default async function handler(req, res) {
       if (arr2.length) { cache.data = arr2; cache.ts = now; cache.key = key; }
     }
     if (!cache.data) cache.data = [];
-
     await kvLoad(now);
-
-    // ---- Fuente extra (gratis): ESPN, scoreboard por liga ----
     await espnRefresh(now, kvSave);
-
-    // Historia por liga ESPN → ratings locales (misma mecánica que las ligas de football-data)
+    await statsSeed(now, kvSave);
+    const LGW = await leagueWeights(dbq, now);
     espnHistFeeds().forEach(function (f) {
       if (HIST[f.cid] && HIST[f.cid].ok && now - HIST[f.cid].ts < 15 * 60 * 1000) return;
       HIST[f.cid] = mkHist(slimMatches(f.fin), now, now);
     });
-
-    // Mezclar football-data + ESPN, sin duplicar el mismo partido (mismo día y equipos equivalentes).
     const esM = espnMatches().filter(function (em) {
       return !cache.data.some(function (f) { return sameFixture(f, em); });
     });
     const DATA = cache.data.concat(esM);
-
     if (!DATA.length) {
       return res.status(200).json({ ok: true, count: 0, window: { from, to }, oddsEnabled: !!oddsKey, statsEnabled: !!process.env.FUTPYTHON_API_KEY, predictions: [], generated: new Date().toISOString(), errors: FD_ERRS, note: 'cargando, volvé a abrir en unos segundos' });
     }
-
     const finished = DATA.filter(function (m) { return !isUpcoming(m.status); });
     const FB = buildRatings(finished, now);
-
+    const EL = computeElo(finished);
+    const H2HMAP = buildH2H(finished);
+    const isE = function (m) { return String(m.competition.id).indexOf('espn:') === 0; };
     function buildTeamFin() {
       const tf = {};
       finished.forEach(function (m) {
@@ -344,7 +369,6 @@ export default async function handler(req, res) {
       return Math.round((tMs - last) / 86400000);
     }
     function restFactor(r) { if (r == null) return 1; if (r <= 3) return 0.94; if (r >= 8) return 1.03; return 1; }
-
     const comps = {};
     const upcomingComps = {};
     DATA.forEach(function (m) {
@@ -354,20 +378,17 @@ export default async function handler(req, res) {
     const upCount = {};
     DATA.forEach(function (m) { if (isUpcoming(m.status)) upCount[m.competition.id] = (upCount[m.competition.id] || 0) + 1; });
     const missing = Object.keys(comps).filter(function (cid) {
-      // Las ligas ESPN ya tienen su historia construida arriba; nunca van a football-data.
       if (String(cid).indexOf('espn:') === 0) return false;
       const e = HIST[cid];
       const ttl = (e && e.ok) ? 3 * 60 * 60 * 1000 : 60 * 1000;
       return !e || now - e.ts > ttl;
     });
-    // Primero las ligas nunca consultadas, y entre ellas las que más partidos próximos tienen (la Premier no puede quedar al final).
     missing.sort(function (a, b) {
       const ea = HIST[a] ? 1 : 0, eb = HIST[b] ? 1 : 0;
       if (ea !== eb) return ea - eb;
       return (upCount[b] || 0) - (upCount[a] || 0);
     });
     await Promise.all(missing.slice(0, 4).map(function (cid) {
-      // Sin "limit": el orden por defecto es ascendente y limit podía traer los PRIMEROS partidos de la temporada.
       return fd('/competitions/' + cid + '/matches?status=FINISHED', token, 6000)
         .then(function (h) {
           const ms = slimMatches((h.matches || []).slice().sort(function (a, b) { return (b.utcDate || '').localeCompare(a.utcDate || ''); }).slice(0, HIST_MAX));
@@ -376,8 +397,6 @@ export default async function handler(req, res) {
         })
         .catch(function (e) { HIST[cid] = { R: {}, lH: 1.35, lA: 1.15, form: {}, ts: now, ok: false, err: String((e && e.message) || e) }; });
     }));
-
-    // ---- Agregados por equipo (goles, over 2.5, BTTS, vallas) desde el historial real ----
     const AGGS = espnAggs();
     const fdFin = {};
     DATA.forEach(function (m) {
@@ -390,7 +409,6 @@ export default async function handler(req, res) {
       const c = compactAgg(buildAggMap(fdFin[cid]));
       if (Object.keys(c).length) AGGS[cid] = c;
     });
-
     const out = [];
     DATA.forEach(function (m) {
       const tMs = new Date(m.utcDate).getTime();
@@ -405,9 +423,11 @@ export default async function handler(req, res) {
       const away = src ? (src.R[an] || DEF) : DEF;
       const lH = src ? src.lH : 1.35, lA = src ? src.lA : 1.15;
       const rH = restDays(hn, tMs), rA = restDays(an, tMs);
-      const hL = cl(lH * home.attH * away.defA * restFactor(rH), 0.25, 3.6);
-      const aL = cl(lA * away.attA * home.defH * restFactor(rA), 0.2, 3.2);
+      const hL0 = cl(lH * home.attH * away.defA * restFactor(rH), 0.25, 3.6);
+      const aL0 = cl(lA * away.attA * home.defH * restFactor(rA), 0.2, 3.2);
       const sampleN = (home.n + away.n) / 2;
+      const adj = eloLambda(hL0, aL0, EL[hn] || 1500, EL[an] || 1500, sampleN);
+      const hL = adj[0], aL = adj[1];
       const bp = buildProbs(hL, aL, sampleN);
       const formOf = function (team) { return (H && H.form && H.form[team]) ? H.form[team] : []; };
       const cid = m.competition.id;
@@ -421,10 +441,11 @@ export default async function handler(req, res) {
         formHome: (formOf(hn).length ? formOf(hn) : (m.formHome || [])), formAway: (formOf(an).length ? formOf(an) : (m.formAway || [])),
         aggH: AG[hn] || null, aggA: AG[an] || null,
         lcode: String(cid).indexOf('espn:') === 0 ? cid.slice(5) : null,
+        sp: statPreds(STATS, hn, an, isE(m)),
+        h2h: h2hOf(H2HMAP, hn, an),
         odds: null, value: [], stats: null
       });
     });
-
     if (oddsKey) {
       const upSports = {};
       const soon = {};
@@ -436,7 +457,6 @@ export default async function handler(req, res) {
           if (new Date(p.time).getTime() - now < 36 * 3600000) { soon[s] = true; soonN[s] = (soonN[s] || 0) + 1; }
         }
       });
-      // Solo deportes con partidos por jugarse. Cada llamada cuesta 2 créditos (h2h + totales).
       const need = Object.keys(upSports).filter(function (s) {
         const e = ODDS[s]; if (!e) return true;
         const ttl = e.fail ? 3 * 60 * 1000 : (e.ttlO || (soon[s] ? 8 * 60 * 60 * 1000 : 24 * 60 * 60 * 1000));
@@ -470,23 +490,28 @@ export default async function handler(req, res) {
         const mh = ih / t * 100, md = id / t * 100, ma = ia / t * 100;
         p.odds = { h: +o.h.toFixed(2), d: +o.d.toFixed(2), a: +o.a.toFixed(2) };
         p.marketProbs = { home: Math.round(mh), draw: Math.round(md), away: Math.round(ma) };
+        const W = (LGW && LGW[p.league] != null) ? LGW[p.league] : MARKET_W;
         p.probs = {
-          home: Math.round(bp2.probs.home * (1 - MARKET_W) + mh * MARKET_W),
-          draw: Math.round(bp2.probs.draw * (1 - MARKET_W) + md * MARKET_W),
-          away: Math.round(bp2.probs.away * (1 - MARKET_W) + ma * MARKET_W)
+          home: Math.round(bp2.probs.home * (1 - W) + mh * W),
+          draw: Math.round(bp2.probs.draw * (1 - W) + md * W),
+          away: Math.round(bp2.probs.away * (1 - W) + ma * W)
         };
         if (p.probs.home + p.probs.draw + p.probs.away !== 100) p.probs.away = 100 - p.probs.home - p.probs.draw;
         const v = [];
-        // Con muestra chica el modelo no sabe nada del equipo: una "ventaja" sería solo ignorancia, no value.
         if (p.sampleN >= 4) {
-          if (bp2.probs.home - mh >= 4) v.push({ side: '1', edge: Math.round(bp2.probs.home - mh) });
-          if (bp2.probs.draw - md >= 4) v.push({ side: 'X', edge: Math.round(bp2.probs.draw - md) });
-          if (bp2.probs.away - ma >= 4) v.push({ side: '2', edge: Math.round(bp2.probs.away - ma) });
+          const sides = [['1', bp2.probs.home, mh, o.h], ['X', bp2.probs.draw, md, o.d], ['2', bp2.probs.away, ma, o.a]];
+          sides.forEach(function (x) {
+            const e = x[1] - x[2];
+            if (e >= 4) {
+              const pr = x[1] / 100, d = x[3];
+              const k = d > 1 ? Math.max(0, (pr * d - 1) / (d - 1)) : 0;
+              v.push({ side: x[0], edge: Math.round(e), kelly: +Math.min(3, k * 25).toFixed(1) });
+            }
+          });
         }
         p.value = v;
       });
     }
-
     out.forEach(function (p) {
       p.main = p.probs.home >= p.probs.draw && p.probs.home >= p.probs.away ? 'home'
         : p.probs.away >= p.probs.home && p.probs.away >= p.probs.draw ? 'away' : 'draw';
@@ -499,7 +524,7 @@ export default async function handler(req, res) {
       const e = HIST[cid];
       histInfo[compName[cid] || cid] = e ? (e.ok ? { ok: true, partidos: e.count } : { ok: false, err: e.err || 'sin datos' }) : { ok: false, err: 'aun no consultado' };
     }
-    res.status(200).json({ ok: true, parser: 'v16', hist: histInfo, kv: KV_ERR || 'ok', count: out.length, window: { from, to }, oddsEnabled: !!oddsKey, oddsLeft: ODDS_LEFT, statsEnabled: !!process.env.FUTPYTHON_API_KEY, espn: espnInfo(), predictions: out, generated: new Date().toISOString() });
+    res.status(200).json({ ok: true, parser: 'v17', hist: histInfo, kv: KV_ERR || 'ok', count: out.length, window: { from, to }, oddsEnabled: !!oddsKey, oddsLeft: ODDS_LEFT, statsEnabled: !!process.env.FUTPYTHON_API_KEY, espn: espnInfo(), statsTeams: Object.keys(STATS).length, predictions: out, generated: new Date().toISOString() });
   } catch (e) {
     res.status(500).json({ ok: false, error: String(e.message || e) });
   }
