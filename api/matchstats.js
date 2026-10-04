@@ -56,7 +56,13 @@ export default async function handler(req, res) {
       return {
         team: e.team ? (e.team.displayName || e.team.name) : null,
         events: (e.events || []).slice(0, 5).map(function (ev) {
-          return { d: (ev.gameDate || '').slice(5, 10), r: ev.gameResult || '', s: ev.score || '', o: ev.opponent ? ev.opponent.displayName : '', at: ev.atVs === '@' };
+          // El score de ESPN es local-visitante y atVs no siempre es fiable:
+          // reconstruir el marcador desde el punto de vista del equipo.
+          const th = e.team && ev.homeTeamId != null ? String(e.team.id) === String(ev.homeTeamId) : ev.atVs !== '@';
+          const gf = th ? ev.homeTeamScore : ev.awayTeamScore;
+          const ga = th ? ev.awayTeamScore : ev.homeTeamScore;
+          const r = gf != null && ga != null ? (Number(gf) > Number(ga) ? 'W' : (Number(gf) === Number(ga) ? 'D' : 'L')) : (ev.gameResult || '');
+          return { d: (ev.gameDate || '').slice(5, 10), r: r, s: gf != null && ga != null ? (gf + '-' + ga) : (ev.score || ''), o: ev.opponent ? ev.opponent.displayName : '', at: !th };
         })
       };
     }).filter(function (x) { return x.team; });
