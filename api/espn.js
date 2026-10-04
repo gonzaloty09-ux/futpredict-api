@@ -1,7 +1,7 @@
 // Fuente extra gratuita: ESPN site API (sin API key).
 // Ligas y copas que football-data.org no cubre en el plan gratis. ESPN en fútbol solo acepta fecha única (no rangos):
 // los partidos próximos y en vivo salen del scoreboard sin fechas; el historial se llena con "sondas" por día
-// (presupuesto fiio por request, estado persistido en KV), así el primer llenado lleva unos minutos.
+// (presupuesto fijo por request, estado persistido en KV), así el primer llenado lleva unos minutos.
 export const ESPN_LEAGUES = [
   { code: 'eng.2', name: 'Championship' },
   { code: 'esp.2', name: 'LaLiga 2' },
@@ -21,7 +21,7 @@ export const ESPN_LEAGUES = [
   { code: 'uefa.champions', name: 'UEFA Champions League' },
   { code: 'uefa.europa', name: 'UEFA Europa League' },
   { code: 'uefa.europa.conf', name: 'UEFA Conference League' },
-  { code: 'conmebol.libertadores', name: 'CONMEBOL Libertadores' },
+  { code: 'conmebol.libertadores', name: 'COMMEBOL Libertadores' },
   { code: 'conmebol.sudamericana', name: 'CONMEBOL Sudamericana' },
   { code: 'eng.fa', name: 'FA Cup' },
   { code: 'eng.league_cup', name: 'EFL Cup' },
@@ -195,6 +195,44 @@ export function espnHistFeeds() {
   ESPN_LEAGUES.forEach(function (L) {
     const E = ESP[L.code];
     if (E && E.fin && E.fin.length >= 6) out.push({ cid: 'espn:' + L.code, fin: E.fin });
+  });
+  return out;
+}
+// ---- Agregados por equipo desde el historial de resultados ----
+// Formato compacto por equipo: [n, gf, ga, o25, btts, cs, hN, hGF, hGA, aN, aGF, aGA] (promedios de goles a 1 decimal).
+function bumpAgg(A, name, gf, ga, isHome) {
+  const a = A[name] = A[name] || { n: 0, gf: 0, ga: 0, o25: 0, btts: 0, cs: 0, hN: 0, hGF: 0, hGA: 0, aN: 0, aGF: 0, aGA: 0 };
+  a.n++; a.gf += gf; a.ga += ga;
+  if (gf + ga > 2.5) a.o25++;
+  if (gf > 0 && ga > 0) a.btts++;
+  if (ga === 0) a.cs++;
+  if (isHome) { a.hN++; a.hGF += gf; a.hGA += ga; } else { a.aN++; a.aGF += gf; a.aGA += ga; }
+}
+function avg(x, n) { return n ? +(x / n).toFixed(1) : 0; }
+export function buildAggMap(ms) {
+  const A = {};
+  ms.forEach(function (m) {
+    if (m.status !== 'FINISHED' || !m.score || !m.score.fullTime || m.score.fullTime.home == null || m.score.fullTime.away == null) return;
+    bumpAgg(A, m.homeTeam.name, m.score.fullTime.home, m.score.fullTime.away, true);
+    bumpAgg(A, m.awayTeam.name, m.score.fullTime.away, m.score.fullTime.home, false);
+  });
+  return A;
+}
+export function compactAgg(A) {
+  const c = {};
+  Object.keys(A || {}).forEach(function (k) {
+    const a = A[k];
+    if (a.n >= 5) c[k] = [a.n, avg(a.gf, a.n), avg(a.ga, a.n), a.o25, a.btts, a.cs, a.hN, avg(a.hGF, a.hN), avg(a.hGA, a.hN), a.aN, avg(a.aGF, a.aN), avg(a.aGA, a.aN)];
+  });
+  return c;
+}
+export function espnAggs() {
+  const out = {};
+  ESPN_LEAGUES.forEach(function (L) {
+    const E = ESP[L.code];
+    if (!E || !E.fin || E.fin.length < 8) return;
+    const c = compactAgg(buildAggMap(E.fin));
+    if (Object.keys(c).length) out['espn:' + L.code] = c;
   });
   return out;
 }
