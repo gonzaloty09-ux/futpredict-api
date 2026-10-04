@@ -119,6 +119,15 @@ export function bumpAllowed(STATS, team, oppObs) {
   });
 }
 function avgA(a) { return a && a.length ? a.reduce(function (s, x) { return s + x; }, 0) / a.length : null; }
+// Factor de regresion por finalizacion (xG estimado): un equipo que anota muy por encima
+// de lo que sus tiros sugieren tiende a normalizar (y viceversa). Ajuste suave acotado ±12%.
+export function perfFactor(STATS, team) {
+  const s = STATS[team];
+  if (!s) return 1;
+  const gf = avgA(s.gf), xg = avgA(s.xg);
+  if (gf == null || xg == null || !(s.gf || []).length || s.gf.length < 3) return 1;
+  return Math.max(0.88, Math.min(1.12, 1 - (gf - xg) * 0.08));
+}
 function globalAvg(STATS, k) {
   let sum = 0, cnt = 0;
   Object.keys(STATS).forEach(function (t) {
