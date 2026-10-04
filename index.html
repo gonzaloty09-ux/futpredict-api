@@ -100,12 +100,13 @@ h1{font-size:1.5rem;color:var(--p);text-align:center}
     <div class="dc"><div class="dn" id="dMB">--</div><div class="dl">Brier del MERCADO (sin margen), mismos partidos</div></div>
     <div class="dc"><div class="dn" id="dMX">--</div><div class="dl">Brier de tu mezcla, mismos partidos</div></div>
     <div class="dc"><div class="dn" id="dLog">--</div><div class="dl">Log-loss (menor = mejor)</div></div>
-    <div class="dc"><div class="dn" id="dCLV">--</div><div class="dl">CLV aprox. (cuota de la 1ª vs última vez que abriste la app; no es la cuota de cierre)</div></div>
+    <div class="dc"><div class="dn" id="dCLV">--</div><div class="dl">CLV aprox. (1ª cuota vs cuota cercana al inicio; si no hay, la última vista)</div></div>
     <div class="dc"><div class="dn" id="dN">0</div><div class="dl">Guardadas</div></div>
     <div class="dc"><div class="dn" id="dW">0</div><div class="dl">✅ Acertadas</div></div>
   </div>
   <div class="note" id="dNote"></div>
   <div class="sec"><div class="stt">🎯 Calibración (¿acierta tanto como dice?)</div><div id="calib"></div></div>
+  <div class="sec"><div class="stt">🧪 Medir modelo (backtest por liga)</div><div class="row"><select id="btSel" class="btn" style="max-width:55%"></select><button class="btn go" onclick="btRun()">Medir</button></div><div id="btOut"></div></div>
   <div class="row"><button class="btn go" onclick="exportCSV()">⬇️ Exportar historial CSV</button></div>
 </div>
 
@@ -152,7 +153,7 @@ function load(){
     if(!d.ok)throw new Error(d.error||'backend devolvió error');
     ALL=d.predictions||[];
     $('st').className='st ok';$('st').textContent='✅ '+ALL.length+' partidos reales ('+(d.window?d.window.from+'→'+d.window.to:'')+')'+(d.oddsEnabled?' · 💰 cuotas':'');
-    sync();chips();render();dash();enrichStats();if(!PULLED){PULLED=1;pull();}
+    sync();chips();render();dash();btFill();enrichStats();if(!PULLED){PULLED=1;pull();}
   }).catch(function(e){
     clearTimeout(to);
     $('st').className='st err';
@@ -206,10 +207,11 @@ function sync(){var ch=false;var SK={home:'h',draw:'d',away:'a'};
       if(!DB.preds[k]){var mk=markets(m.hL,m.aL);DB.preds[k]={id:k,home:m.home,away:m.away,league:m.league,pred:m.main,score:mk.top[0].h+'-'+mk.top[0].a,pr:[m.probs.home,m.probs.draw,m.probs.away],sn:m.sampleN||0,pm:tri(m.modelProbs),pk:tri(m.marketProbs),oddsOpen:m.odds?{h:m.odds.h,d:m.odds.d,a:m.odds.a}:null,oddsLast:m.odds?{h:m.odds.h,d:m.odds.d,a:m.odds.a}:null,estado:'pend',rs:null};ch=true;DIRTY[k]=1;}
       else{var q=DB.preds[k];
         if(m.odds){q.oddsLast={h:m.odds.h,d:m.odds.d,a:m.odds.a};ch=true;DIRTY[k]=1;}
+        if(m.odds&&!q.oddsClose&&(st!=='pre'||new Date(m.time).getTime()-Date.now()<3*3600000)){q.oddsClose={h:m.odds.h,d:m.odds.d,a:m.odds.a};ch=true;DIRTY[k]=1;}
         if(!q.pk&&m.marketProbs){q.pk=tri(m.marketProbs);ch=true;DIRTY[k]=1;}}
     }
     if(st==='post'&&m.score&&DB.preds[k]&&DB.preds[k].estado==='pend'){var p=DB.preds[k];p.rs=m.score.home+'-'+m.score.away;var real=m.score.home>m.score.away?'home':(m.score.home<m.score.away?'away':'draw');p.estado=(p.pred===real)?'win':'loss';
-      if(p.oddsOpen&&p.oddsLast){var o=p.oddsOpen[SK[p.pred]],c2=p.oddsLast[SK[p.pred]];if(o&&c2)p.clv=+((o/c2-1)*100).toFixed(1);}
+      var base=p.oddsClose||p.oddsLast;if(p.oddsOpen&&base){var o=p.oddsOpen[SK[p.pred]],c2=base[SK[p.pred]];if(o&&c2)p.clv=+((o/c2-1)*100).toFixed(1);}
       ch=true;DIRTY[k]=1;}
   });if(ch){save();push();}}
 function toggleConf(){CONF=!CONF;localStorage.setItem('fpconf',CONF?'1':'0');$('confBtn').classList.toggle('on',CONF);render();}
@@ -290,7 +292,8 @@ function render(){var tk=tkey();var list=ALL.filter(function(m){if(curL!=='all'&
       '<div class="mk"><div class="mi"><div class="ml">+1.5</div><div class="mv">'+mk.o15+'%</div></div><div class="mi"><div class="ml">+2.5</div><div class="mv">'+mk.o25+'%</div></div><div class="mi"><div class="ml">+3.5</div><div class="mv">'+mk.o35+'%</div></div><div class="mi"><div class="ml">BTTS</div><div class="mv">'+mk.bt+'%</div></div></div>'+
       statsBlock(m)+
       (m.odds?'<div class="mk3"><div class="mi"><div class="ml">Cuota 1</div><div class="mv">'+fmtO(m.odds.h)+'</div></div><div class="mi"><div class="ml">Cuota X</div><div class="mv">'+fmtO(m.odds.d)+'</div></div><div class="mi"><div class="ml">Cuota 2</div><div class="mv">'+fmtO(m.odds.a)+'</div></div></div>':'')+
-      (m.value&&m.value.length?'<div class="note" style="color:var(--p);font-weight:bold">💎 Value (modelo puro vs mercado): '+m.value.map(function(v){return v.side+' +'+v.edge+'%'+(v.kelly?' (stake '+v.kelly+'%)':'');}).join(' · ')+'</div>':'');}
+      (m.value&&m.value.length?'<div class="note" style="color:var(--p);font-weight:bold">💎 Value (modelo puro vs mercado): '+m.value.map(function(v){return v.side+' +'+v.edge+'%'+(v.kelly?' (stake '+v.kelly+'%)':'');}).join(' · ')+'</div>':'')+
+      (sv&&oddsMove(sv.oddsOpen,sv.oddsClose||sv.oddsLast)>0.08?'<div class="note" style="color:var(--w);font-weight:bold">⚠️ Cuota en movimiento (±'+Math.round(oddsMove(sv.oddsOpen,sv.oddsClose||sv.oddsLast)*100)+'%) desde la 1ª medición</div>':'');}
     h+='</div>';});
   $('grid').innerHTML=h;
   requestAnimationFrame(function(){var e=document.querySelectorAll('.pf');for(var i=0;i<e.length;i++)e[i].style.width=(e[i].getAttribute('data-w')||0)+'%';});
@@ -357,10 +360,23 @@ function dash(){var p=Object.values(DB.preds);var d=p.filter(function(x){return 
   $('calib').innerHTML=ch+'<div class="note">Con n chico los tramos son ruido; sirven de a 100+ partidos.</div>';
   hist();}
 function exportCSV(){var SK={home:'h',draw:'d',away:'a'};var rows=[['liga','local','visitante','pred','score_pred','score_real','estado','clv','cuota_open','cuota_close','mezcla_1','mezcla_x','mezcla_2','mercado_1','mercado_x','mercado_2','modelo_1','modelo_x','modelo_2']];
-  Object.values(DB.preds).forEach(function(p){var ko=p.oddsOpen?p.oddsOpen[SK[p.pred]]:'';var kc=p.oddsLast?p.oddsLast[SK[p.pred]]:'';var a=p.pr||['','',''],b=p.pk||['','',''],c=p.pm||['','',''];
+  Object.values(DB.preds).forEach(function(p){var ko=p.oddsOpen?p.oddsOpen[SK[p.pred]]:'';var kb=p.oddsClose||p.oddsLast;var kc=kb?kb[SK[p.pred]]:'';var a=p.pr||['','',''],b=p.pk||['','',''],c=p.pm||['','',''];
     rows.push([p.league,p.home,p.away,p.pred,p.score,p.rs||'',p.estado,p.clv!=null?p.clv:'',ko,kc,a[0],a[1],a[2],b[0],b[1],b[2],c[0],c[1],c[2]]);});
   var csv=rows.map(function(r){return r.map(function(x){return '"'+String(x).replace(/"/g,'""')+'"';}).join(',');}).join('\n');
   var b=new Blob([csv],{type:'text/csv'});var a=document.createElement('a');a.href=URL.createObjectURL(b);a.download='futpredict_historial.csv';a.click();}
+function btFill(){var s={};ALL.forEach(function(m){if(m.cid&&!s[m.cid])s[m.cid]=m.league;});var sel=$('btSel');if(!sel)return;sel.innerHTML=Object.keys(s).map(function(k){return '<option value="'+esc(k)+'">'+esc(s[k])+'</option>';}).join('');}
+function btRun(){var c=$('btSel').value;if(!c)return;$('btOut').innerHTML='<div class="note">⏳ Replayeando historial sin mirar el futuro (~10s)…</div>';
+fetch('api/backtest?cid='+encodeURIComponent(c)).then(function(r){return r.json();}).then(function(d){
+ if(!d.ok){$('btOut').innerHTML='<div class="note">⚠️ '+esc(d.error||'no medible')+'</div>';return;}
+ var rows=(d.calib||[]).map(function(x){return '<div class="rw"><span class="rl">'+esc(x.dice)+'</span><span class="rv">n='+x.n+' · acertó '+x.acerto+'%</span></div>';}).join('');
+ $('btOut').innerHTML='<div class="rw"><span class="rl">Partidos medidos</span><span class="rv">'+d.n+'</span></div>'+
+ '<div class="rw"><span class="rl">Precisión</span><span class="rv">'+d.acc+'%</span></div>'+
+ '<div class="rw"><span class="rl">Brier modelo</span><span class="rv">'+d.brier+'</span></div>'+
+ '<div class="rw"><span class="rl">Brier azar</span><span class="rv">'+d.brierBaseline+'</span></div>'+
+ '<div class="rw"><span class="rl">Log-loss</span><span class="rv">'+d.logloss+'</span></div>'+rows+
+ '<div class="note">Si Brier modelo &lt; Brier azar, el modelo aporta información real en esa liga.</div>';
+}).catch(function(e){$('btOut').innerHTML='<div class="note">⚠️ '+esc(String(e))+'</div>';});}
+function oddsMove(o,c){if(!o||!c)return 0;var m=0;['h','d','a'].forEach(function(k){if(o[k]&&c[k])m=Math.max(m,Math.abs(c[k]/o[k]-1));});return m;}
 function hist(){var p=Object.values(DB.preds);if(!p.length){$('hlist').innerHTML='<div class="note">📭 Sin registros.</div>';return;}
   var PK={home:'1 Local',draw:'X Empate',away:'2 Visita'};
   function rl(rs){var o=outc(rs);return o[0]?'1':(o[1]?'X':'2');}
