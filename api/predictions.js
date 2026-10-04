@@ -1,7 +1,7 @@
 export const maxDuration = 20;
 import { dbq, slimMatches, mkHist, buildRatings, buildProbs, invLambda, normName, mapLeague, fd, fetchOdds, findOdds, isUpcoming, cors, cl } from './core.js';
 import { espnMatches, sameFixture, espnRefresh, espnRestore, espnHistFeeds, espnInfo, espnAggs, buildAggMap, compactAgg } from './espn.js';
-import { computeElo, eloLambda, buildH2H, h2hOf, leagueWeights, statPreds, bumpStats } from './pro.js';
+import { computeElo, eloLambda, buildH2H, h2hOf, leagueWeights, statPreds, bumpStats, bumpAllowed } from './pro.js';
 
 const cache = { data: null, ts: 0, key: '' };
 let FD_ERRS = [];
@@ -17,6 +17,17 @@ let KV_LOADED = 0;
 let KV_ERR = null;
 const MARKET_W = 0.4;
 const HIST_MAX = 200;
+// Rate limit por IP (ventana fija de 1 minuto, en memoria por instancia).
+const RL = {};
+function rateOk(req) {
+  const ip = String(((req.headers['x-forwarded-for'] || '') + '').split(',')[0] || 'x').trim();
+  const min = Math.floor(Date.now() / 60000);
+  if (Object.keys(RL).length > 800) { Object.keys(RL).forEach(function (k) { if (RL[k].min !== min) delete RL[k]; }); }
+  const e = RL[ip];
+  if (!e || e.min !== min) { RL[ip] = { min: min, n: 1 }; return true; }
+  e.n++;
+  return e.n <= 60;
+}
 
 async function kvSave(k, v) {
   try { await dbq('insert into kv (k, v, ts) values ($1, $2::jsonb, now()) on conflict (k) do update set v = excluded.v, ts = now()', [k, JSON.stringify(v)], 3000); } catch (e) { KV_ERR = String((e && e.message) || e); }
@@ -64,6 +75,7 @@ async function statsSeed(now) {
         if (!s || !s.boxscore || !s.boxscore.teams) return false;
         const st = function (team, name) { const x = (team.statistics || []).find(function (z) { return z.name === name; }); return x ? parseFloat(x.displayValue) : null; };
         let ch = false;
+        const arr = [];
         s.boxscore.teams.forEach(function (tm) {
           if (!tm.team || !tm.team.displayName) return;
           const o = {
@@ -72,10 +84,19 @@ async function statsSeed(now) {
             sav: st(tm, 'saves'), off: st(tm, 'offsides'), rc: st(tm, 'redCards'),
             blo: st(tm, 'blockedShots'), pas: st(tm, 'totalPasses'), cru: st(tm, 'totalCrosses'),
             lon: st(tm, 'totalLongBalls'), tac: st(tm, 'totalTackles'), int: st(tm, 'interceptions'),
-            cle: st(tm, 'totalClearance')
+            cle: st(tm, 'totalClearance'), pko: st(tm, 'penaltyKickGoals'), pks: st(tm, 'penaltyKickShots'),
+            apas: st(tm, 'accuratePasses'), acru: st(tm, 'accurateCrosses'), alon: st(tm, 'accurateLongBalls'),
+            etac: st(tm, 'effectiveTackles')
           };
-          if (Object.keys(o).some(function (k) { return o[k] != null; })) { if (bumpStats(STATS, tm.team.displayName, o, tm.homeAway === 'home')) ch = true; }
+          arr.push({ name: tm.team.displayName, o: o, home: tm.homeAway === 'home' });
         });
+        arr.forEach(function (x) {
+          if (Object.keys(x.o).some(function (k) { return x.o[k] != null; })) { if (bumpStats(STATS, x.name, x.o, x.home)) ch = true; }
+        });
+        if (arr.length === 2) {
+          if (bumpAllowed(STATS, arr[0].name, arr[1].o)) ch = true;
+          if (bumpAllowed(STATS, arr[1].name, arr[0].o)) ch = true;
+        }
         return ch;
       })
       .catch(function () { clearTimeout(t); return false; });
@@ -136,6 +157,8 @@ export default async function handler(req, res) {
   cors(res);
   res.setHeader('Cache-Control', 's-maxage=60, stale-while-revalidate=300');
   if (req.method === 'OPTIONS') return res.status(200).end();
+  if (req.method !== 'GET') return res.status(405).json({ ok: false, error: 'method' });
+  if (!rateOk(req)) return res.status(429).json({ ok: false, error: 'rate limit: esperá un momento y recargá' });
   const token = process.env.FOOTBALL_DATA_TOKEN;
   const oddsKey = process.env.ODDS_API_KEY || null;
   if (!token) return res.status(500).json({ ok: false, error: 'Falta FOOTBALL_DATA_TOKEN' });
@@ -243,6 +266,18 @@ export default async function handler(req, res) {
     }));
 
     const AGGS = espnAggs();
+    // Rho calibrado por liga: si la liga empata más de lo esperado (25% típico), rho más negativo
+    // aumenta la masa de marcadores bajos (0-0, 1-1); si empata menos, se relaja. Acotado [-0.12, 0.02].
+    const RHO_L = {};
+    for (const cid in HIST) {
+      const H = HIST[cid];
+      if (!H || !H.ok || !H._matches || !H._matches.length) continue;
+      const fin = H._matches.filter(function (m) { return m.score && m.score.fullTime && m.score.fullTime.home != null && m.score.fullTime.away != null; });
+      if (fin.length < 20) { RHO_L[cid] = -0.06; continue; }
+      const dr = fin.filter(function (m) { return m.score.fullTime.home === m.score.fullTime.away; }).length / fin.length;
+      RHO_L[cid] = Math.max(-0.12, Math.min(0.02, -0.06 + (dr - 0.25) * 0.25));
+    }
+    const rhoOf = function (cid) { return RHO_L[cid] != null ? RHO_L[cid] : -0.06; };
     const fdFin = {};
     DATA.forEach(function (m) {
       if (String(m.competition.id).indexOf('espn:') === 0) return;
@@ -274,7 +309,7 @@ export default async function handler(req, res) {
       const sampleN = (home.n + away.n) / 2;
       const adj = eloLambda(hL0, aL0, EL[hn] || 1500, EL[an] || 1500, sampleN);
       const hL = adj[0], aL = adj[1];
-      const bp = buildProbs(hL, aL, sampleN);
+      const bp = buildProbs(hL, aL, sampleN, rhoOf(m.competition.id));
       const formOf = function (team) { return (H && H.form && H.form[team]) ? H.form[team] : []; };
       const cid = m.competition.id;
       const AG = AGGS[cid] || {};
@@ -287,6 +322,7 @@ export default async function handler(req, res) {
         formHome: (formOf(hn).length ? formOf(hn) : (m.formHome || [])), formAway: (formOf(an).length ? formOf(an) : (m.formAway || [])),
         aggH: AG[hn] || null, aggA: AG[an] || null,
         lcode: String(cid).indexOf('espn:') === 0 ? cid.slice(5) : null,
+        rho: +rhoOf(cid).toFixed(3),
         sp: statPreds(STATS, hn, an, isE(m)),
         h2h: h2hOf(H2HMAP, hn, an),
         odds: null, value: [], stats: null
@@ -332,7 +368,7 @@ export default async function handler(req, res) {
           const f = lt / (p.hL + p.aL);
           if (f > 0.6 && f < 1.6) { p.hL = +(p.hL * f).toFixed(2); p.aL = +(p.aL * f).toFixed(2); }
         }
-        const bp2 = buildProbs(p.hL, p.aL, p.sampleN);
+        const bp2 = buildProbs(p.hL, p.aL, p.sampleN, p.rho);
         p.modelProbs = bp2.probs;
         const ih = 1 / o.h, id = 1 / o.d, ia = 1 / o.a; const t = ih + id + ia;
         const mh = ih / t * 100, md = id / t * 100, ma = ia / t * 100;
@@ -373,7 +409,7 @@ export default async function handler(req, res) {
       const e = HIST[cid];
       histInfo[compName[cid] || cid] = e ? (e.ok ? { ok: true, partidos: e.count } : { ok: false, err: e.err || 'sin datos' }) : { ok: false, err: 'aun no consultado' };
     }
-    res.status(200).json({ ok: true, parser: 'v17', hist: histInfo, kv: KV_ERR || 'ok', count: out.length, window: { from, to }, oddsEnabled: !!oddsKey, oddsLeft: ODDS_LEFT, espn: espnInfo(), statsTeams: Object.keys(STATS).length, predictions: out, generated: new Date().toISOString() });
+    res.status(200).json({ ok: true, parser: 'v18', hist: histInfo, kv: KV_ERR || 'ok', count: out.length, window: { from, to }, oddsEnabled: !!oddsKey, oddsLeft: ODDS_LEFT, espn: espnInfo(), statsTeams: Object.keys(STATS).length, predictions: out, generated: new Date().toISOString() });
   } catch (e) {
     res.status(500).json({ ok: false, error: String(e.message || e) });
   }
