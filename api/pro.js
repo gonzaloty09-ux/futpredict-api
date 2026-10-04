@@ -80,22 +80,37 @@ export const SPK = [
 ];
 const ROLL = 12;
 
-// STATS[team] = { n, sh: [últimos valores], ..., pos: [...] } — observaciones por equipo.
-export function bumpStats(STATS, team, obs) {
+// STATS[team] = { n, sh: [últimos valores], shH/shA: solo como local/visitante, ... }
+export function bumpStats(STATS, team, obs, isHome) {
   const s = STATS[team] = STATS[team] || { n: 0 };
   let any = false;
+  const vk = isHome === true ? 'H' : (isHome === false ? 'A' : null);
   Object.keys(obs).forEach(function (k) {
     const v = obs[k];
     if (v == null || !isFinite(v)) return;
     if (!s[k]) s[k] = [];
     s[k].push(Math.round(v * 10) / 10);
     if (s[k].length > ROLL) s[k] = s[k].slice(-ROLL);
+    if (vk) {
+      const kk = k + vk;
+      if (!s[kk]) s[kk] = [];
+      s[kk].push(Math.round(v * 10) / 10);
+      if (s[kk].length > ROLL) s[kk] = s[kk].slice(-ROLL);
+    }
     any = true;
   });
   if (any) s.n = Math.max(s.n || 0, Math.min(ROLL, (s.sh || []).length));
   return any;
 }
 function avgA(a) { return a && a.length ? a.reduce(function (s, x) { return s + x; }, 0) / a.length : null; }
+// Promedio ponderado por localía: 65% en su condición, 35% general (si hay 2+ muestras de la condición).
+function venueAvg(s, k, isHome) {
+  const g = avgA(s[k]);
+  if (g == null) return null;
+  const v = avgA(s[k + (isHome ? 'H' : 'A')]);
+  if (v == null || (s[k + (isHome ? 'H' : 'A')] || []).length < 2) return g;
+  return 0.65 * v + 0.35 * g;
+}
 function nphi(z) {
   // Aproximación de Abramowitz-Stegun de la CDF normal.
   const t = 1 / (1 + 0.2316419 * Math.abs(z));
@@ -143,18 +158,20 @@ export function statPreds(STATS, hn, an, espnMatch) {
   if (!A || !B) return null;
   const n = Math.min(A.n || 0, B.n || 0);
   if (n < 3) return null;
+  // Riesgo extra honesto con muestra chica: cada muestra faltante suma ~5 puntos de riesgo.
+  const extraRisk = Math.min(25, Math.max(0, (5 - n) * 5));
   const out = [];
   SPK.forEach(function (p) {
     const k = p[0];
-    const aH = avgA(A[k]), aA = avgA(B[k]);
+    const aH = venueAvg(A, k, true), aA = venueAvg(B, k, false);
     if (aH == null || aA == null) return;
     const r = oneStat(p[1], aH, aA);
-    if (r) out.push(Object.assign({ k: k, n: n }, r));
+    if (r) out.push(Object.assign({ k: k, n: n }, r, { risk: Math.min(85, r.risk + extraRisk), p: Math.max(15, r.p - extraRisk) }));
   });
-  const pH = avgA(A.pos), pA = avgA(B.pos);
+  const pH = venueAvg(A, 'pos', true), pA = venueAvg(B, 'pos', false);
   if (pH != null && pA != null) {
     const ph = Math.round(50 + (pH - pA) / 2), pa = 100 - ph;
-    out.push({ k: 'pos', name: 'Posesión %', n: n, ph: Math.min(90, Math.max(10, ph)), pa: Math.min(90, Math.max(10, pa)), risk: Math.round(Math.max(15, Math.min(65, 65 - Math.abs(pH - pA) * 1.8))) });
+    out.push({ k: 'pos', name: 'Posesión %', n: n, ph: Math.min(90, Math.max(10, ph)), pa: Math.min(90, Math.max(10, pa)), risk: Math.min(85, Math.round(Math.max(15, Math.min(65, 65 - Math.abs(pH - pA) * 1.8)) + extraRisk)) });
   }
   return out.length ? out : null;
 }
