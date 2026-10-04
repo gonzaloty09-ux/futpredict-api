@@ -190,9 +190,11 @@ export function sameTeam(a, b) {
   if (a.indexOf(b) !== -1 || b.indexOf(a) !== -1) return true;
   const ta = nameTokens(a), tb = nameTokens(b);
   if (!ta.length || !tb.length) return false;
-  const small = ta.length <= tb.length ? ta : tb;
-  const big = ta.length <= tb.length ? tb : ta;
-  return small.every(function (w) { return big.indexOf(w) !== -1; });
+  let small = ta, big = tb;
+  if (ta.length > tb.length) { small = tb; big = ta; }
+  let hit = 0;
+  for (let i = 0; i < small.length; i++) { if (big.indexOf(small[i]) !== -1) hit++; }
+  return hit === small.length;
 }
 export function findOdds(list, fh, fa) {
   if (!fh || !fa) return null;
