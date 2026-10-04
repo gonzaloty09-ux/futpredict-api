@@ -56,7 +56,7 @@ h1{font-size:1.5rem;color:var(--p);text-align:center}
 .dn{font-size:1.3rem;font-weight:bold;color:var(--p)}.dl{font-size:.6rem;color:var(--t2)}
 .hist{background:var(--c);border-radius:8px;padding:8px;margin:5px 0;display:flex;justify-content:space-between;font-size:.7rem}
 .rb{padding:2px 7px;border-radius:8px;font-size:.62rem;font-weight:bold}
-.rb.win{background:rgba(0,255,136,.2);color:var(--p)}.rb.loss{background:rgba(255,71,87,.2);color:var(--d)}.rb.pend{background:rgba(255,165,2,.2);color:var(--w)}
+.rb.win{background:rgba(0,255,136,.2);color:var(--p)}.rb.loss{background:rgba(255,71,87,.2);color:var(--d)}.rb.pend{background:rgba(255,165,2,.2);color:var(--z)}
 .modal{display:none;position:fixed;inset:0;background:rgba(0,0,0,.9);z-index:50;justify-content:center;align-items:center;padding:14px}
 .modal.on{display:flex}
 .mc{background:#1a1f3a;border:2px solid var(--p);border-radius:15px;padding:14px;max-width:480px;width:100%;max-height:85vh;overflow-y:auto;position:relative}
@@ -90,7 +90,7 @@ h1{font-size:1.5rem;color:var(--p);text-align:center}
   </div>
   <div class="chips" id="chips"></div>
   <div class="grid" id="grid"></div>
-  <div class="note">🛡️ = solo partidos con muestra suficiente y datos reales. n= partidos de referencia. +18.</div>
+  <div class="note">n= partidos de referencia por equipo · 💎 value = modelo puro vs mercado · las ligas nuevas llenan su historial en los primeros minutos</div>
 </div>
 
 <div class="pane" id="pane-d">
@@ -213,7 +213,7 @@ function sync(){var ch=false;var SK={home:'h',draw:'d',away:'a'};
       ch=true;DIRTY[k]=1;}
   });if(ch){save();push();}}
 function toggleConf(){CONF=!CONF;localStorage.setItem('fpconf',CONF?'1':'0');$('confBtn').classList.toggle('on',CONF);render();}
-function chips(){var s={};ALL.forEach(function(m){s[m.league]=1;});var n=Object.keys(s).slice(0,18);
+function chips(){var s={};ALL.forEach(function(m){s[m.league]=1;});var n=Object.keys(s).slice(0,40);
   var h='<div class="chip '+(curL==='all'?'on':'')+'" onclick="setL(\'all\')">🌍 Todas</div>';
   n.forEach(function(x){h+='<div class="chip '+(curL===x?'on':'')+'" onclick="setL(\''+x.replace(/'/g,"\\'")+'\')">'+x+'</div>';});
   $('chips').innerHTML=h;}
@@ -235,7 +235,7 @@ function render(){var tk=tkey();var list=ALL.filter(function(m){if(curL!=='all'&
     var mp=Math.max(pr.home,pr.draw,pr.away);
     var low=(m.sampleN||0)<4;
     h+='<div class="card'+(low?' dim':'')+'" onclick="openM('+m.id+')">'+
-      '<div class="li"><span>'+esc(m.league)+'</span><span class="'+(st==='in'?'lv':(st==='post'?'pp':'mt'))+'">'+(st==='in'?'🔴 EN VIVO':(st==='post'?'FINAL':(st==='postp'?'POSPUESTO':'🕐 '+dateKey(m.time).slice(5)+' '+fmtT(m.time)+((m.restHome!=null&&m.restAway!=null&&m.restHome<=14&&m.restAway<=14)?' · descanso '+m.restHome+'/'+m.restAway+'d':''))))+'</span></div>'+
+      '<div class="li"><span>'+esc(m.league)+'</span><span class="'+(st==='in'?'lv':(st==='post'?'pp':'mt'))+'">'+(st==='in'?'🔴 EN VIVO':(st==='post'?'FINAL':(st==='postp'?'POSPUESTO':'🕐 '+dateKey(m.time).slice(5)+' '+fmtT(m.time)+((m.restHome!=null&&m.restAway!=null&&m.restHome<=14&&m.restAway<=14)?' · descanso '+m.restHome++'/'+m.restAway+'d''))+'</span></div>'+
       '<div class="teams"><div class="tm"><div class="tn">'+esc(m.home)+'</div>'+formHTML(m.formHome)+'</div><div class="vs">'+((st==='post'&&m.score)?(m.score.home+'-'+m.score.away):'VS')+'</div><div class="tm"><div class="tn">'+esc(m.away)+'</div>'+formHTML(m.formAway)+'</div></div>';
     if(st==='post'&&sv&&sv.rs){h+='<div class="pbox '+(sv.estado==='win'?'win':'loss')+'"><div class="ps">'+sv.rs+'</div><div class="pt">Pick: '+({home:'1',draw:'X',away:'2'}[sv.pred]||'?')+' → '+(sv.estado==='win'?'✅ Acertada':'❌ Fallada')+(sv.clv!=null?' · CLV '+sv.clv+'%':'')+'</div></div>';}
     else if(st==='post'){h+='<div class="pbox"><div class="ps">'+(m.score?(m.score.home+'-'+m.score.away):'?')+'</div><div class="pt">Final</div></div>';}
@@ -288,7 +288,7 @@ function dash(){var p=Object.values(DB.preds);var d=p.filter(function(x){return 
   cm.forEach(function(x){var o=outc(x.rs);var a=bs(pct(x.pk),o),b=bs(pct(x.pr),o);bk.push(a);bx.push(b);df.push(b-a);});
   $('dMB').textContent=f3(mean(bk));$('dMX').textContent=f3(mean(bx));
   var sd=seOf(df);
-  $('dNote').innerHTML='n='+dec.length+' informadas (n≥4)'+(excl?' · '+excl+' excluidas por muestra chica (n<4)':'')+(sd!=null?' · Mezcla − Mercado = '+mean(df).toFixed(3)+' ±'+sd.toFixed(3)+' (n='+cm.length+'). Si el rango incluye 0, no hay diferencia real.':(cm.length?' · con cuotas: '+cm.length+' (aún pocos)':' · aùn sin partidos con cuotas guardadas'));
+  $('dNote').innerHTML='n='+dec.length+' informadas (n≥4)'+(excl?' · '+excl+' excluidas por muestra chica (n<4)':'')+(sd!=null?' · Mezcla − Mercado = '+mean(df).toFixed(3)+' ±'+sd.toFixed(3)+' (n='+cm.length+'). Si el rango incluye 0, no hay diferencia real.':(cm.length?' · con cuotas: '+cm.length+' (aún pocos)':' · aún sin partidos con cuotas guardadas'));
   var clvs=p.filter(function(x){return x.clv!=null;});
   $('dCLV').textContent=clvs.length?(clvs.reduce(function(s,x){return s+x.clv;},0)/clvs.length).toFixed(1)+'%':'--';
   var E=[0,0.4,0.5,0.6,0.7,1.01],L=['<40%','40-50%','50-60%','60-70%','70%+'],ch='';
