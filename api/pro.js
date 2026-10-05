@@ -6,7 +6,7 @@ import { normName, sameTeam } from './espn.js';
 export function computeElo(finished) {
   const elo = {}; const K = 24, HA = 65;
   finished
-    .filter(function (m) { return m.status === 'FINISHED' && m.score && m.score.fullTime && m.score.fullTime.home != null && m.score.fullTime.away != null; })
+    .filter(function (m) { return (m.status == null || m.status === 'FINISHED') && m.score && m.score.fullTime && m.score.fullTime.home != null && m.score.fullTime.away != null; })
     .sort(function (a, b) { return (a.utcDate || '').localeCompare(b.utcDate || ''); })
     .forEach(function (m) {
       const h = m.homeTeam.name, a = m.awayTeam.name;
@@ -31,7 +31,7 @@ export function eloLambda(hL, aL, eloH, eloA, sampleN) {
 export function buildH2H(finished) {
   const map = {};
   finished
-    .filter(function (m) { return m.status === 'FINISHED' && m.score && m.score.fullTime && m.score.fullTime.home != null; })
+    .filter(function (m) { return (m.status == null || m.status === 'FINISHED') && m.score && m.score.fullTime && m.score.fullTime.home != null; })
     .sort(function (a, b) { return (b.utcDate || '').localeCompare(a.utcDate || ''); })
     .forEach(function (m) {
       const k = [normName(m.homeTeam.name), normName(m.awayTeam.name)].sort().join('|');
