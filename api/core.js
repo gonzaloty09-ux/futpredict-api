@@ -84,10 +84,10 @@ export function buildRatings(matches, nowMs) {
     const t = new Date(m.utcDate).getTime();
     const w = Math.exp(-((nowMs - t) / 86400000) / DECAY_D);
     const hn = m.homeTeam.name, an = m.awayTeam.name;
-    const H = T[hn] = T[hn] || { hg: 0, hga: 0, hn: 0, ag: 0, aga: 0, an: 0 };
-    const A = T[an] = T[an] || { hg: 0, hga: 0, hn: 0, ag: 0, aga: 0, an: 0 };
-    H.hg += hs * w; H.hga += as * w; H.hn += w;
-    A.ag += as * w; A.aga += hs * w; A.an += w;
+    const H = T[hn] = T[hn] || { hg: 0, hga: 0, hn: 0, ag: 0, aga: 0, an: 0, hc: 0, ac: 0 };
+    const A = T[an] = T[an] || { hg: 0, hga: 0, hn: 0, ag: 0, aga: 0, an: 0, hc: 0, ac: 0 };
+    H.hg += hs * w; H.hga += as * w; H.hn += w; H.hc++;
+    A.ag += as * w; A.aga += hs * w; A.an += w; A.ac++;
     sh += hs * w; sa += as * w; sw += w;
   });
   const lH = sw ? sh / sw : 1.35, lA = sw ? sa / sw : 1.15;
@@ -100,7 +100,8 @@ export function buildRatings(matches, nowMs) {
       defH: cl(t.hn ? 1 + (((t.hga / t.hn) / lA) - 1) * kH : 1, 0.4, 2.6),
       attA: cl(t.an ? 1 + (((t.ag / t.an) / lA) - 1) * kA : 1, 0.4, 2.6),
       defA: cl(t.an ? 1 + (((t.aga / t.an) / lH) - 1) * kA : 1, 0.4, 2.6),
-      n: t.hn + t.an
+      n: t.hn + t.an,
+      nc: (t.hc || 0) + (t.ac || 0)
     };
   }
   return { R: R, lH: lH, lA: lA };
@@ -129,9 +130,10 @@ export function buildProbs(hL, aL, sampleN, rho) {
   const maxG = 8; let tot = 0, hW = 0, d = 0, aW = 0; const sc = [];
   for (let h = 0; h <= maxG; h++) for (let a = 0; a <= maxG; a++) {
     const p = poisson(hL, h) * poisson(aL, a) * tau(h, a, hL, aL, R);
-    tot += p; sc.push({ h: h, a: a, p: p / tot });
+    tot += p; sc.push({ h: h, a: a, p: p });
     if (h > a) hW += p; else if (h === a) d += p; else aW += p;
   }
+  sc.forEach(function (x) { x.p /= tot; });
   sc.sort(function (x, y) { return y.p - x.p; });
   const s = sampleN / (sampleN + 4); const b = 100 / 3;
   let ph = Math.round(b + (hW / tot * 100 - b) * s);
