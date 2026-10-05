@@ -286,7 +286,9 @@ function render(){var tk=tkey();var list=ALL.filter(function(m){if(curL!=='all'&
     if(st==='post'&&sv&&sv.rs){h+='<div class="pbox '+(sv.estado==='win'?'win':'loss')+'"><div class="ps">'+sv.rs+'</div><div class="pt">Pick: '+({home:'1',draw:'X',away:'2'}[sv.pred]||'?')+' → '+(sv.estado==='win'?'✅ Acertada':'❌ Fallada')+(sv.clv!=null?' · CLV '+sv.clv+'%':'')+'</div></div>';}
     else if(st==='post'){h+='<div class="pbox"><div class="ps">'+(m.score?(m.score.home+'-'+m.score.away):'?')+'</div><div class="pt">Final</div></div>';}
     else{var sc=sv?sv.score:(mk.top[0].h+'-'+mk.top[0].a);
-      h+='<div class="pbox"><div class="pm"><div class="ps">'+sc+(e.adj?' ✍️':'')+'</div><div class="pt">'+mt+'<br>cuota justa '+fairOdds(mp)+'</div></div></div>'+
+      var t3=(m.top&&m.top.length?m.top:mk.top.map(function(s){return{s:s.h+'-'+s.a,p:Math.round(s.p*100)};})).slice(0,3);
+      var t3s=t3.map(function(s){return s.s+(s.p?' ('+s.p+'%)':'');}).join(' · ');
+      h+='<div class="pbox"><div class="pm"><div class="ps">'+sc+(e.adj?' ✍️':'')+'</div><div class="pt">'+mt+'<br>cuota justa '+fairOdds(mp)+'</div><div class="pt" style="color:var(--t2);font-size:.6rem">'+t3s+'</div></div></div>'+
       '<div class="probs"><div class="pi"><div class="pl">Local</div><div class="pb"><div class="pf" data-w="'+pr.home+'"></div></div><div class="pv">'+pr.home+'%</div></div><div class="pi"><div class="pl">Empate</div><div class="pb"><div class="pf" data-w="'+pr.draw+'"></div></div><div class="pv">'+pr.draw+'%</div></div><div class="pi"><div class="pl">Visit.</div><div class="pb"><div class="pf" data-w="'+pr.away+'"></div></div><div class="pv">'+pr.away+'%</div></div></div>'+
       '<div class="note">n='+m.sampleN+' partidos de referencia'+(low?' · ⚠️ muestra chica':'')+'</div>'+
       '<div class="mk"><div class="mi"><div class="ml">+1.5</div><div class="mv">'+mk.o15+'%</div></div><div class="mi"><div class="ml">+2.5</div><div class="mv">'+mk.o25+'%</div></div><div class="mi"><div class="ml">+3.5</div><div class="mv">'+mk.o35+'%</div></div><div class="mi"><div class="ml">BTTS</div><div class="mv">'+mk.bt+'%</div></div></div>'+
@@ -304,17 +306,17 @@ function openM(id){var m=null;for(var i=0;i<ALL.length;i++){if(String(ALL[i].id)
   var mt=pickOf(pr);
   var mp=Math.max(pr.home,pr.draw,pr.away);
   var aggHtml=aggRows(m.home,m.aggH)+aggRows(m.away,m.aggA);
-  var stSec=m.stats?('<div class="sec"><div class="stt">📊 Stats reales (promedio '+(m.stats.src==='histórico'?'histórico, varias temporadas':'temporada actual')+', n='+m.stats.home.n+')</div>'+
-    '<div class="rw"><span class="rl">Tiros</span><span class="rv">'+m.stats.home.sh+' - '+m.stats.away.sh+'</span></div>'+
+  var stSec=m.stats?('<div class="sec"><div class="stt">📊 Stats reales (promedio '+(m.stats.src==='histórico'?'histórico, varias temporadas':'temporada actual')+', n='+m.stats.home.n+')</div>'+ 
+    '<div class="rw"><span class="rl">Tiros</span><span class="rv">'+m.stats.home.sh+' - '+m.stats.away.sh+'</span></div>'+ 
     '<div class="rw"><span class="rl">A puerta</span><span class="rv">'+m.stats.home.sot+' - '+m.stats.away.sot+'</span></div>'+ 
-    '<div class="rw"><span class="rl">Córners</span><span class="rv">'+m.stats.home.cor+' - '+m.stats.away.cor+'</span></div>'+
-    '<div class="rw"><span class="rl">Faltas</span><span class="rv">'+m.stats.home.fou+' - '+m.stats.away.fou+'</span></div>'+
-    '<div class="rw"><span class="rl">Amarillas</span><span class="rv">'+m.stats.home.yc+' - '+m.stats.away.yc+'</span></div>'+
+    '<div class="rw"><span class="rl">Córners</span><span class="rv">'+m.stats.home.cor+' - '+m.stats.away.cor+'</span></div>'+ 
+    '<div class="rw"><span class="rl">Faltas</span><span class="rv">'+m.stats.home.fou+' - '+m.stats.away.fou+'</span></div>'+ 
+    '<div class="rw"><span class="rl">Amarillas</span><span class="rv">'+m.stats.home.yc+' - '+m.stats.away.yc+'</span></div>'+ 
     '<div class="rw"><span class="rl">xG</span><span class="rv">'+(m.stats.home.xg!=null?m.stats.home.xg+' - '+m.stats.away.xg:'n/d')+'</span></div></div>')
    :(aggHtml?('<div class="sec"><div class="stt">📊 Promedios reales por equipo (del historial que colectamos)</div>'+aggHtml+'</div>')
    :('<div class="sec"><div class="stt">⚠️ No disponible para esta liga</div><div class="rw"><span class="rl">Tiros/Córners/Faltas/xG</span><span class="rv">n/d — no los inventamos</span></div></div>'));
   $('mb').innerHTML='<div class="stt" style="text-align:center;font-size:.95rem;color:var(--p)">📊 '+esc(m.home)+' vs '+esc(m.away)+'</div>'+
-   '<div class="sec"><div class="stt">🔮 Predicción</div><div class="rw"><span class="rl">Marcador</span><span class="rv">'+mk.top[0].h+'-'+mk.top[0].a+'</span></div><div class="rw"><span class="rl">Resultado</span><span class="rv">'+mt+' ('+mp+'%)</span></div><div class="rw"><span class="rl">1/X/2</span><span class="rv">'+pr.home+'/'+pr.draw+'/'+pr.away+'</span></div><div class="rw"><span class="rl">λ (goles esp.)</span><span class="rv">'+e.h.toFixed(2)+' / '+e.a.toFixed(2)+(e.adj?' ✍️':'')+'</span></div><div class="rw"><span class="rl">Descanso L/V</span><span class="rv">'+((m.restHome!=null&&m.restAway!=null)?m.restHome+'d / '+m.restAway+'d':'—')+'</span></div><div class="rw"><span class="rl">Forma L/V</span><span class="rv">'+((m.formHome||[]).join('')||'—')+' / '+((m.formAway||[]).join('')||'—')+'</span></div></div>'+ 
+   '<div class="sec"><div class="stt">🔮 Predicción</div><div class="rw"><span class="rl">Marcador más prob.</span><span class="rv">'+mk.top[0].h+'-'+mk.top[0].a+'</span></div><div class="rw"><span class="rl">Top 3 marcadores</span><span class="rv">'+mk.top.map(function(s){return s.h+'-'+s.a+' ('+Math.round(s.p*100)+'%)';}).join(' · ')+'</span></div><div class="rw"><span class="rl">Resultado</span><span class="rv">'+mt+' ('+mp+'%)</span></div><div class="rw"><span class="rl">1/X/2</span><span class="rv">'+pr.home+'/'+pr.draw+'/'+pr.away+'</span></div><div class="rw"><span class="rl">λ (goles esp.)</span><span class="rv">'+e.h.toFixed(2)+' / '+e.a.toFixed(2)+(e.adj?' ✍️':'')+'</span></div><div class="rw"><span class="rl">Descanso L/V</span><span class="rv">'+((m.restHome!=null&&m.restAway!=null)?m.restHome+'d / '+m.restAway+'d':'—')+'</span></div><div class="rw"><span class="rl">Forma L/V</span><span class="rv">'+((m.formHome||[]).join('')||'—')+' / '+((m.formAway||[]).join('')||'—')+'</span></div></div>'+
    '<div class="sec"><div class="stt">📈 Goles</div><div class="rw"><span class="rl">+1.5/+2.5/+3.5</span><span class="rv">'+mk.o15+'/'+mk.o25+'/'+mk.o35+'</span></div><div class="rw"><span class="rl">BTTS</span><span class="rv">'+mk.bt+'%</span></div><div class="rw"><span class="rl">Top marcadores</span><span class="rv">'+mk.top.map(function(s){return s.h+'-'+s.a;}).join(', ')+'</span></div></div>'+
    stSec+
    spHTML(m.sp)+
@@ -369,11 +371,11 @@ function btRun(){var c=$('btSel').value;if(!c)return;$('btOut').innerHTML='<div 
 fetch('api/backtest?cid='+encodeURIComponent(c)).then(function(r){return r.json();}).then(function(d){
  if(!d.ok){$('btOut').innerHTML='<div class="note">⚠️ '+esc(d.error||'no medible')+'</div>';return;}
  var rows=(d.calib||[]).map(function(x){return '<div class="rw"><span class="rl">'+esc(x.dice)+'</span><span class="rv">n='+x.n+' · acertó '+x.acerto+'%</span></div>';}).join('');
- $('btOut').innerHTML='<div class="rw"><span class="rl">Partidos medidos</span><span class="rv">'+d.n+'</span></div>'+
- '<div class="rw"><span class="rl">Precisión</span><span class="rv">'+d.acc+'%</span></div>'+
- '<div class="rw"><span class="rl">Brier modelo</span><span class="rv">'+d.brier+'</span></div>'+
- '<div class="rw"><span class="rl">Brier azar</span><span class="rv">'+d.brierBaseline+'</span></div>'+
- '<div class="rw"><span class="rl">Log-loss</span><span class="rv">'+d.logloss+'</span></div>'+rows+
+ $('btOut').innerHTML='<div class="rw"><span class="rl">Partidos medidos</span><span class="rv">'+d.n+'</span></div>'+ 
+ '<div class="rw"><span class="rl">Precisión</span><span class="rv">'+d.acc+'%</span></div>'+ 
+ '<div class="rw"><span class="rl">Brier modelo</span><span class="rv">'+d.brier+'</span></div>'+ 
+ '<div class="rw"><span class="rl">Brier azar</span><span class="rv">'+d.brierBaseline+'</span></div>'+ 
+ '<div class="rw"><span class="rl">Log-loss</span><span class="rv">'+d.logloss+'</span></div>'+rows+ 
  '<div class="note">Si Brier modelo &lt; Brier azar, el modelo aporta información real en esa liga.</div>';
 }).catch(function(e){$('btOut').innerHTML='<div class="note">⚠️ '+esc(String(e))+'</div>';});}
 function oddsMove(o,c){if(!o||!c)return 0;var m=0;['h','d','a'].forEach(function(k){if(o[k]&&c[k])m=Math.max(m,Math.abs(c[k]/o[k]-1));});return m;}
