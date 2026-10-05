@@ -17,6 +17,20 @@ let KV_LOADED = 0;
 let KV_ERR = null;
 const MARKET_W = 0.4;
 const HIST_MAX = 200;
+// Matcheo difuso de nombres para ratings: los nombres de ESPN no siempre coinciden
+// con los de football-data ("SC Internacional" vs "Internacional") y sin esto los
+// equipos caen al pool por defecto con n=0.
+function rIx(R) {
+  const m = {};
+  Object.keys(R).forEach(function (k) { const nn = normName(k); if (!m[nn]) m[nn] = k; });
+  return m;
+}
+function rGet(R, ix, nm) {
+  if (!R || !nm) return null;
+  if (R[nm]) return R[nm];
+  const k = ix && ix[normName(nm)];
+  return k ? R[k] : null;
+}
 // Rate limit por IP (ventana fija de 1 minuto, en memoria por instancia).
 const RL = {};
 function rateOk(req) {
@@ -223,9 +237,23 @@ export default async function handler(req, res) {
     }
 
     const finished = DATA.filter(function (m) { return !isUpcoming(m.status); });
-    const FB = buildRatings(finished, now);
-    const EL = computeElo(finished);
-    const H2HMAP = buildH2H(finished);
+    // Pool global: ventana reciente + todo el historial de ligas (deduplicado).
+    // Antes solo usaba la ventana de ~3 días y el pool tenía muestra inservible.
+    const seenM = {};
+    const poolMs = [];
+    const dupKey = function (m) { return (m.utcDate || '') + '|' + m.homeTeam.name + '|' + m.awayTeam.name; };
+    finished.forEach(function (m) { const k = dupKey(m); if (!seenM[k]) { seenM[k] = 1; poolMs.push(m); } });
+    for (const cidP in HIST) {
+      const HP = HIST[cidP];
+      if (!HP || !HP.ok || !HP._matches) continue;
+      HP._matches.forEach(function (m) { const k = dupKey(m); if (!seenM[k]) { seenM[k] = 1; poolMs.push(m); } });
+    }
+    const FB = buildRatings(poolMs, now);
+    const IXFB = rIx(FB.R);
+    const IXH_ = {};
+    const EL = computeElo(poolMs);
+    const IEL = rIx(EL);
+    const H2HMAP = buildH2H(poolMs);
     const isE = function (m) { return String(m.competition.id).indexOf('espn:') === 0; };
 
     const teamFin = {};
@@ -313,19 +341,29 @@ export default async function handler(req, res) {
       const H = HIST[m.competition.id];
       // Ratings cruzados: si el historial propio de la competencia tiene poca muestra por equipo
       // (tipico en copas), se usa el pool global (incluye liga local) que es mas estable.
-      let src = null;
-      if (H && H.ok && H.R[hn] && H.R[an] && (H.R[hn].n + H.R[an].n) >= 8) src = H;
-      else if (FB.R[hn] && FB.R[an]) src = { R: FB.R, lH: FB.lH, lA: FB.lA, form: {} };
-      else if (H && H.ok && H.R[hn] && H.R[an]) src = H;
-      const DEF = { attH: 1, defH: 1, attA: 1, defA: 1, n: 0 };
-      const home = src ? (src.R[hn] || DEF) : DEF;
-      const away = src ? (src.R[an] || DEF) : DEF;
+      let src = null, srcIx = null;
+      const cidM = m.competition.id;
+      const iH = (H && H.ok) ? (IXH_[cidM] || (IXH_[cidM] = rIx(H.R))) : null;
+      const hHs = iH ? rGet(H.R, iH, hn) : null;
+      const aHs = iH ? rGet(H.R, iH, an) : null;
+      if (hHs && aHs && (hHs.n + aHs.n) >= 8) { src = H; srcIx = iH; }
+      else {
+        const hGs = rGet(FB.R, IXFB, hn), aGs = rGet(FB.R, IXFB, an);
+        if (hGs && aGs) { src = { R: FB.R, lH: FB.lH, lA: FB.lA, form: {} }; srcIx = IXFB; }
+        else if (hHs && aHs) { src = H; srcIx = iH; }
+      }
+      const DEF = { attH: 1, defH: 1, attA: 1, defA: 1, n: 0, nc: 0 };
+      const home = src ? (rGet(src.R, srcIx, hn) || DEF) : DEF;
+      const away = src ? (rGet(src.R, srcIx, an) || DEF) : DEF;
       const lH = src ? src.lH : 1.35, lA = src ? src.lA : 1.15;
       const rH = restDays(hn, tMs), rA = restDays(an, tMs);
       const hL0 = cl(lH * home.attH * away.defA * restFactor(rH), 0.25, 3.6);
       const aL0 = cl(lA * away.attA * home.defH * restFactor(rA), 0.2, 3.2);
-      const sampleN = (home.n + away.n) / 2;
-      const adj = eloLambda(hL0, aL0, EL[hn] || 1500, EL[an] || 1500, sampleN);
+      // Confianza de muestra: max entre peso decaido y conteo real de partidos (tope 25 por
+      // equipo). El peso decaido subestima equipos con historia larga y aplastaba todas las
+      // probabilidades hacia 33/33/33.
+      const sampleN = Math.max((home.n + away.n) / 2, (Math.min(home.nc || 0, 25) + Math.min(away.nc || 0, 25)) / 2);
+      const adj = eloLambda(hL0, aL0, rGet(EL, IEL, hn) || 1500, rGet(EL, IEL, an) || 1500, sampleN);
       let hL = adj[0], aL = adj[1];
       // Instancias de copa (eliminacion directa): el juego tiende a ser mas cauteloso -> lambda algo menor.
       if (['uefa.champions', 'uefa.europa', 'uefa.conference', 'conmebol.libertadores', 'conmebol.sudamericana', 'copa.del.rey', 'fa.cup', 'efl.cup', 'dfb.pokal', 'coppa.italia', 'coupe.de.france', 'uefa.nations'].indexOf(String(m.competition.id).replace('espn:', '')) !== -1) { hL *= 0.95; aL *= 0.95; }
@@ -342,6 +380,7 @@ export default async function handler(req, res) {
         league: m.competition.name, time: m.utcDate, status: m.status,
         score: m.score && m.score.fullTime ? { home: m.score.fullTime.home, away: m.score.fullTime.away } : null,
         probs: bp.probs, modelProbs: bp.probs, main: '', hL: +hL.toFixed(2), aL: +aL.toFixed(2), sampleN: Math.round(sampleN),
+        top: bp.top.map(function (x) { return { s: x.h + '-' + x.a, p: Math.round(x.p * 100) }; }),
         restHome: rH, restAway: rA,
         formHome: (formOf(hn).length ? formOf(hn) : (m.formHome || [])), formAway: (formOf(an).length ? formOf(an) : (m.formAway || [])),
         aggH: AG[hn] || null, aggA: AG[an] || null,
@@ -394,6 +433,7 @@ export default async function handler(req, res) {
         }
         const bp2 = buildProbs(p.hL, p.aL, p.sampleN, p.rho);
         p.modelProbs = bp2.probs;
+        p.top = bp2.top.map(function (x) { return { s: x.h + '-' + x.a, p: Math.round(x.p * 100) }; });
         const ih = 1 / o.h, id = 1 / o.d, ia = 1 / o.a; const t = ih + id + ia;
         const mh = ih / t * 100, md = id / t * 100, ma = ia / t * 100;
         p.odds = { h: +o.h.toFixed(2), d: +o.d.toFixed(2), a: +o.a.toFixed(2) };
@@ -433,7 +473,7 @@ export default async function handler(req, res) {
       const e = HIST[cid];
       histInfo[compName[cid] || cid] = e ? (e.ok ? { ok: true, partidos: e.count } : { ok: false, err: e.err || 'sin datos' }) : { ok: false, err: 'aun no consultado' };
     }
-    res.status(200).json({ ok: true, parser: 'v20', hist: histInfo, kv: KV_ERR || 'ok', count: out.length, window: { from, to }, oddsEnabled: !!oddsKey, oddsLeft: ODDS_LEFT, espn: espnInfo(), statsTeams: Object.keys(STATS).length, predictions: out, generated: new Date().toISOString() });
+    res.status(200).json({ ok: true, parser: 'v21', hist: histInfo, kv: KV_ERR || 'ok', count: out.length, window: { from, to }, oddsEnabled: !!oddsKey, oddsLeft: ODDS_LEFT, espn: espnInfo(), statsTeams: Object.keys(STATS).length, predictions: out, generated: new Date().toISOString() });
   } catch (e) {
     res.status(500).json({ ok: false, error: String(e.message || e) });
   }
