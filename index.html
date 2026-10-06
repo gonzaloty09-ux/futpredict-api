@@ -245,7 +245,7 @@ function tkey(){if(curD==='w')return null;var d=new Date();d.setDate(d.getDate()
 function statsBlock(m){
   if(m.stats){var s=m.stats;
     return '<div class="mk3"><div class="mi"><div class="ml">Tiros'+(m.stats.src==='histórico'?' (hist.)':'')+'</div><div class="mv">'+s.home.sh+'-'+s.away.sh+'</div></div><div class="mi"><div class="ml">A puerta</div><div class="mv">'+s.home.sot+'-'+s.away.sot+'</div></div><div class="mi"><div class="ml">Córners</div><div class="mv">'+s.home.cor+'-'+s.away.cor+'</div></div></div>'+
-    '<div class="mk3"><div class="mi"><div class="ml">Faltas</div><div class="mv">'+s.home.fou+'-'+s.away.fou+'</div></div><div class="mi"><div class="ml">Amarillas</div><div class="mv">'+s.home.yc+'-'+s.away.yc+'</div></div><div class="mi"><div class="ml">xG</div><div class="mv">'+(s.home.xg!=null?s.home.xg:'n/d')+'-'+(s.away.xh!=null?s.away.xg:'n/d')+'</div></div></div>';}
+    '<div class="mk3"><div class="mi"><div class="ml">Faltas</div><div class="mv">'+s.home.fou+'-'+s.away.fou+'</div></div><div class="mi"><div class="ml">Amarillas</div><div class="mv">'+s.home.yc+'-'+s.away.yc+'</div></div><div class="mi"><div class="ml">xG</div><div class="mv">'+(s.home.xg!=null?s.home.xg:'n/d')+'-'+(s.away.xg!=null?s.away.xg:'n/d')+'</div></div></div>';}
   return '';
 }
 // Agregados reales por equipo desde el historial: [n, gf, ga, o25, btts, cs, hN, hGF, hGA, aN, aGF, aGA]
@@ -395,7 +395,8 @@ function dash(){var p=Object.values(DB.preds);var d=p.filter(function(x){return 
     ch+='<div class="rw"><span class="rl">'+L[i]+' (n='+g.length+')</span><span class="rv">'+(g.length?'dice '+pa+'% · acertó '+ra+'%':'—')+'</span></div>';}
   $('calib').innerHTML=ch+'<div class="note">Con n chico los tramos son ruido; sirven de a 100+ partidos.</div>';
   hist();}
-function exportCSV(){var SK={home:'h',draw:'d',away:'a'};var rows=[['liga','local','visitante','pred','score_pred','score_real','estado','clv','cuota_open','cuota_close','mezcla_1','mezcla_x','mezcla_2','mercado_1','mercado_x','mercado_2','modelo_1','modelo_x','modelo_2']];
+function exportCSV(){var SK={home:'h',draw
+'d',away:'a'};var rows=[['liga','local','visitante','pred','score_pred','score_real','estado','clv','cuota_open','cuota_close','mezcla_1','mezcla_x','mezcla_2','mercado_1','mercado_x','mercado_2','modelo_1','modelo_x','modelo_2']];
   Object.values(DB.preds).forEach(function(p){var ko=p.oddsOpen?p.oddsOpen[SK[p.pred]]:'';var kb=p.oddsClose||p.oddsLast;var kc=kb?kb[SK[p.pred]]:'';var a=p.pr||['','',''],b=p.pk||['','',''],c=p.pm||['','',''];
     rows.push([p.league,p.home,p.away,p.pred,p.score,p.rs||'',p.estado,p.clv!=null?p.clv:'',ko,kc,a[0],a[1],a[2],b[0],b[1],b[2],c[0],c[1],c[2]]);});
   var csv=rows.map(function(r){return r.map(function(x){return '"'+String(x).replace(/"/g,'""')+'"';}).join(',');}).join('\n');
@@ -414,7 +415,8 @@ fetch('api/backtest?cid='+encodeURIComponent(c)).then(function(r){return r.json(
 }).catch(function(e){$('btOut').innerHTML='<div class="note">⚠️ '+esc(String(e))+'</div>';});}
 function oddsMove(o,c){if(!o||!c)return 0;var m=0;['h','d','a'].forEach(function(k){if(o[k]&&c[k])m=Math.max(m,Math.abs(c[k]/o[k]-1));});return m;}
 function hist(){var p=Object.values(DB.preds);if(!p.length){$('hlist').innerHTML='<div class="note">📭 Sin registros.</div>';return;}
-  var PK={home:'1 Local',draw:'X Empate',away:'2 Visita'};
+  var PK={home:'1 Local',draw
+'X Empate',away:'2 Visita'};
   function rl(rs){var o=outc(rs);return o[0]?'1':(o[1]?'X':'2');}
   $('hlist').innerHTML=p.reverse().slice(0,60).map(function(x){return '<div class="hist"><div><b>'+esc(x.home)+' vs '+esc(x.away)+'</b><div style="font-size:.62rem;color:var(--t2)">'+esc(x.league)+' · Pick: '+(PK[x.pred]||'?')+(x.rs?' · Real '+esc(x.rs)+' ('+rl(x.rs)+')':'')+' · marcador prob. '+esc(x.score)+(x.clv!=null?' · CLV '+x.clv+'%':'')+'</div></div><span class="rb '+x.estado+'">'+(x.estado==='win'?'✅':(x.estado==='loss'?'❌':''))+'</span></div>';}).join('');}
 function tab(k,el){var b=document.querySelectorAll('.tb');for(var i=0;i<b.length;i++)b[i].classList.remove('on');el.classList.add('on');
