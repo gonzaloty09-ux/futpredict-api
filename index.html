@@ -237,7 +237,7 @@ function sync(){var ch=false;var SK={home:'h',draw:'d',away:'a'};
 function toggleConf(){CONF=!CONF;localStorage.setItem('fpconf',CONF?'1':'0');$('confBtn').classList.toggle('on',CONF);render();}
 function chips(){var s={};ALL.forEach(function(m){s[m.league]=1;});var n=Object.keys(s).slice(0,40);
   var h='<div class="chip '+(curL==='all'?'on':'')+'" onclick="setL(\'all\')">🌍 Todas</div>';
-  n.forEach(function(x){h+='<div class="chip '+(curL===x?'on':'')+'" onclick="setL(\''+x.replace(/'/g,"\\'")+'\')">'+x+'</div>';});
+  n.forEach(function(x){h+='<div class="chip '+(curL===x?'on':'')+'" onclick="setL(\''+x.replace(/'/g,"\\'")+ '\')">'+x+'</div>';});
   $('chips').innerHTML=h;}
 function setL(v){curL=v;chips();render();}
 function setD(v,el){curD=v;var b=document.querySelectorAll('.row .btn');for(var i=0;i<b.length;i++)b[i].classList.remove('on');el.classList.add('on');render();}
@@ -352,10 +352,10 @@ function openM(id){var m=null;for(var i=0;i<ALL.length;i++){if(String(ALL[i].id)
   $('mb').innerHTML='<div class="mhead">📊 '+esc(m.home)+' vs '+esc(m.away)+'</div>'+
    col('🔮 Predicción',predRows,true)+
    col('📈 Goles',goalsRows,true)+
-   (stSec?col(stT,stSec,false):'')+
+   (stSec?col(stT,stSec,false):'')+ 
    (m.sp?col('📈 Predicción de estadísticas'+(m.sp[0].n<6?' (muestra chica, n='+m.sp[0].n+')':' (n='+m.sp[0].n+' por equipo)'),spHTML(m.sp),false):'')+
    (m.h2h&&m.h2h.length?col('🤝 Historial directo (H2H)',h2hHTML(m.h2h),false):'')+
-   '<div id="mse"></div>'+
+   '<div id="mse"></div>'+ 
    (m.odds?col('💰 Mercado',mkRows,false):'')+
    col('✍️ Ajuste manual (si sabés algo que el modelo no)',adjRows,false);
   $('modal').classList.add('on');
@@ -395,8 +395,7 @@ function dash(){var p=Object.values(DB.preds);var d=p.filter(function(x){return 
     ch+='<div class="rw"><span class="rl">'+L[i]+' (n='+g.length+')</span><span class="rv">'+(g.length?'dice '+pa+'% · acertó '+ra+'%':'—')+'</span></div>';}
   $('calib').innerHTML=ch+'<div class="note">Con n chico los tramos son ruido; sirven de a 100+ partidos.</div>';
   hist();}
-function exportCSV(){var SK={home:'h',draw
-'d',away:'a'};var rows=[['liga','local','visitante','pred','score_pred','score_real','estado','clv','cuota_open','cuota_close','mezcla_1','mezcla_x','mezcla_2','mercado_1','mercado_x','mercado_2','modelo_1','modelo_x','modelo_2']];
+function exportCSV(){var SK={home:'h',draw:'d',away:'a'};var rows=[['liga','local','visitante','pred','score_pred','score_real','estado','clv','cuota_open','cuota_close','mezcla_1','mezcla_x','mezcla_2','mercado_1','mercado_x','mercado_2','modelo_1','modelo_x','modelo_2']];
   Object.values(DB.preds).forEach(function(p){var ko=p.oddsOpen?p.oddsOpen[SK[p.pred]]:'';var kb=p.oddsClose||p.oddsLast;var kc=kb?kb[SK[p.pred]]:'';var a=p.pr||['','',''],b=p.pk||['','',''],c=p.pm||['','',''];
     rows.push([p.league,p.home,p.away,p.pred,p.score,p.rs||'',p.estado,p.clv!=null?p.clv:'',ko,kc,a[0],a[1],a[2],b[0],b[1],b[2],c[0],c[1],c[2]]);});
   var csv=rows.map(function(r){return r.map(function(x){return '"'+String(x).replace(/"/g,'""')+'"';}).join(',');}).join('\n');
@@ -406,17 +405,16 @@ function btRun(){var c=$('btSel').value;if(!c)return;$('btOut').innerHTML='<div 
 fetch('api/backtest?cid='+encodeURIComponent(c)).then(function(r){return r.json();}).then(function(d){
  if(!d.ok){$('btOut').innerHTML='<div class="note">⚠️ '+esc(d.error||'no medible')+'</div>';return;}
  var rows=(d.calib||[]).map(function(x){return '<div class="rw"><span class="rl">'+esc(x.dice)+'</span><span class="rv">n='+x.n+' · acertó '+x.acerto+'%</span></div>';}).join('');
- $('btOut').innerHTML='<div class="rw"><span class="rl">Partidos medidos</span><span class="rv">'+d.n+'</span></div>'+
- '<div class="rw"><span class="rl">Precisión</span><span class="rv">'+d.acc+'%</span></div>'+
- '<div class="rw"><span class="rl">Brier modelo</span><span class="rv">'+d.brier+'</span></div>'+
- '<div class="rw"><span class="rl">Brier azar</span><span class="rv">'+d.brierBaseline+'</span></div>'+
+ $('btOut').innerHTML='<div class="rw"><span class="rl">Partidos medidos</span><span class="rv">'+d.n+'</span></div>'+ 
+ '<div class="rw"><span class="rl">Precisión</span><span class="rv">'+d.acc+'%</span></div>'+ 
+ '<div class="rw"><span class="rl">Brier modelo</span><span class="rv">'+d.brier+'</span></div>'+ 
+ '<div class="rw"><span class="rl">Brier azar</span><span class="rv">'+d.brierBaseline+'</span></div>'+ 
  '<div class="rw"><span class="rl">Log-loss</span><span class="rv">'+d.logloss+'</span></div>'+rows+
  '<div class="note">Si Brier modelo &lt; Brier azar, el modelo aporta información real en esa liga.</div>';
 }).catch(function(e){$('btOut').innerHTML='<div class="note">⚠️ '+esc(String(e))+'</div>';});}
 function oddsMove(o,c){if(!o||!c)return 0;var m=0;['h','d','a'].forEach(function(k){if(o[k]&&c[k])m=Math.max(m,Math.abs(c[k]/o[k]-1));});return m;}
 function hist(){var p=Object.values(DB.preds);if(!p.length){$('hlist').innerHTML='<div class="note">📭 Sin registros.</div>';return;}
-  var PK={home:'1 Local',draw
-'X Empate',away:'2 Visita'};
+  var PK={home:'1 Local',draw:'X Empate',away:'2 Visita'};
   function rl(rs){var o=outc(rs);return o[0]?'1':(o[1]?'X':'2');}
   $('hlist').innerHTML=p.reverse().slice(0,60).map(function(x){return '<div class="hist"><div><b>'+esc(x.home)+' vs '+esc(x.away)+'</b><div style="font-size:.62rem;color:var(--t2)">'+esc(x.league)+' · Pick: '+(PK[x.pred]||'?')+(x.rs?' · Real '+esc(x.rs)+' ('+rl(x.rs)+')':'')+' · marcador prob. '+esc(x.score)+(x.clv!=null?' · CLV '+x.clv+'%':'')+'</div></div><span class="rb '+x.estado+'">'+(x.estado==='win'?'✅':(x.estado==='loss'?'❌':''))+'</span></div>';}).join('');}
 function tab(k,el){var b=document.querySelectorAll('.tb');for(var i=0;i<b.length;i++)b[i].classList.remove('on');el.classList.add('on');
