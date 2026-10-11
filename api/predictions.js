@@ -44,7 +44,7 @@ function rateOk(req) {
 }
 
 async function kvSave(k, v) {
-  try { await dbq('insert into kv (k, v, ts) values ($1, $2::jsonb, now()) on conflict (k) do update set v = excluded.v, ts = now()', [k, JSON.stringify(v)], 3000); } catch (e) { KV_ERR = String((e && e.message) || e); }
+  try { await dbq('insert into kv (k, v, ts) values ($1, $2::jsonb, now()) on conflict (k) do update set v = excluded.v, ts = now()', [k, JSON.stringify(v)], 8000); } catch (e) { KV_ERR = String((e && e.message) || e); }
 }
 async function kvLoad(now) {
   if (now - KV_LOADED < 15000) return;
@@ -73,7 +73,7 @@ async function kvLoad(now) {
         ODDS_LEFT = Number(v.left); ODDS_LEFT_TS = ms;
       }
     });
-  } catch (e) { KV_ERR = String((e && e.message) || e); }
+  } catch (e) { KV_ERR = String((e && e.message) || e); KV_LOADED = 0; }
 }
 async function statsSeed(now) {
   if (now - SEED_TS < 20000) return;
