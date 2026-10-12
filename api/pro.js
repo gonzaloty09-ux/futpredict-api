@@ -44,28 +44,42 @@ export function h2hOf(map, hn, an) {
   return map[[normName(hn), normName(an)].sort().join('|')] || null;
 }
 
-// ---- Calibración por liga: peso del mercado según Brier histórico (modelo vs mercado) ----
+// ---- Calibración por liga: peso del mercado según Brier histórico (mercado vs modelo PURO) ----
 let LGW = null, LGW_TS = 0;
 export async function leagueWeights(dbq, now) {
   if (LGW && now - LGW_TS < 30 * 60 * 1000) return LGW;
   try {
-    const rows = await dbq("select league, pr, pk, rs from preds where estado <> 'pend' and rs is not null and pr is not null limit 5000", [], 2500);
+    // P-A2: ORDER BY created_at DESC — sin esto, al superar 5000 registros los pesos se
+    // calculaban siempre sobre los más viejos y nunca aprendían de resultados recientes.
+    const rows = await dbq("select league, pm, pk, rs from preds where estado <> 'pend' and rs is not null and pm is not null and pk is not null order by created_at desc limit 5000", [], 2500);
     const L = {};
+    // Las probs se guardan en 0-100: normalizar a 0-1 antes del Brier.
+    // (Antes se calculaba en 0-100 y el término 2*(bK-bM) saturaba los límites 0.15/0.65 siempre.)
+    const brier = function (p, y) {
+      let s = 0;
+      for (let i = 0; i < 3; i++) { const d = p[i] / 100 - y[i]; s += d * d; }
+      return s;
+    };
     rows.forEach(function (x) {
       const rs = String(x.rs).split('-'); const h = +rs[0], a = +rs[1];
-      if (!isFinite(h) || !isFinite(a) || !Array.isArray(x.pr) || x.pr.length !== 3) return;
+      if (!isFinite(h) || !isFinite(a)) return;
+      if (!Array.isArray(x.pm) || x.pm.length !== 3 || !Array.isArray(x.pk) || x.pk.length !== 3) return;
+      if (!x.pm.every(isFinite) || !x.pk.every(isFinite)) return;
       const y = [h > a ? 1 : 0, h === a ? 1 : 0, h < a ? 1 : 0];
-      const o = L[x.league] = L[x.league] || { n: 0, bM: 0, nK: 0, bK: 0 };
-      o.n++; o.bM += (x.pr[0] - y[0]) * (x.pr[0] - y[0]) + (x.pr[1] - y[1]) * (x.pr[1] - y[1]) + (x.pr[2] - y[2]) * (x.pr[2] - y[2]);
-      if (Array.isArray(x.pk) && x.pk.length === 3) { o.nK++; o.bK += (x.pk[0] - y[0]) * (x.pk[0] - y[0]) + (x.pk[1] - y[1]) * (x.pk[1] - y[1]) + (x.pk[2] - y[2]) * (x.pk[2] - y[2]); }
+      // Comparación pareada sobre los MISMOS partidos: mercado (pk) vs modelo PURO (pm).
+      // (Antes comparaba mercado vs la mezcla pr — que ya contiene 40% mercado — y con
+      // conjuntos de partidos distintos para cada lado.)
+      const o = L[x.league] = L[x.league] || { n: 0, bM: 0, bK: 0 };
+      o.n++; o.bM += brier(x.pm, y); o.bK += brier(x.pk, y);
     });
     const w = {};
     Object.keys(L).forEach(function (k) {
       const o = L[k];
-      if (o.n >= 15 && o.nK >= 10) {
-        const bM = o.bM / o.n, bK = o.bK / o.nK;
-        // Si el mercado acierta más que el modelo en esa liga (bK < bM), darle más peso. Límites 0.15–0.65.
-        w[k] = Math.round(Math.min(0.65, Math.max(0.15, 0.4 + 2 * (bK - bM))) * 100) / 100;
+      if (o.n >= 15) {
+        const bM = o.bM / o.n, bK = o.bK / o.n;
+        // W es el peso DEL MERCADO en la mezcla final: si el mercado es mejor (bK < bM),
+        // su peso SUBE. (El signo estaba invertido: antes bajaba.)
+        w[k] = Math.round(Math.min(0.65, Math.max(0.15, 0.4 + 2 * (bM - bK))) * 100) / 100;
       }
     });
     LGW = w; LGW_TS = now;
