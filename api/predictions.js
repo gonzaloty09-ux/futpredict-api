@@ -1,7 +1,7 @@
 export const maxDuration = 20;
 import { dbq, slimMatches, mkHist, buildRatings, buildProbs, invLambda, normName, mapLeague, fd, fetchOdds, findOdds, isUpcoming, cors, noCache, cl, requireAuth, rateLimitKV, clientIp } from './core.js';
 import { espnMatches, sameFixture, espnRefresh, espnRestore, espnHistFeeds, espnInfo, espnAggs, buildAggMap, compactAgg } from './espn.js';
-import { computeElo, eloLambda, buildH2H, h2hOf, leagueWeights, statPreds, bumpStats, bumpAllowed, perfFactor } from './pro.js';
+import { computeElo, eloLambda, buildH2H, h2hOf, leagueWeights, statPreds, bumpStats, bumpAllowed, perfFactor, SPK } from './pro.js';
 
 const cache = { data: null, ts: 0, key: '' };
 let FD_ERRS = [];
@@ -17,6 +17,31 @@ let KV_LOADED = 0;
 let KV_ERR = null;
 const MARKET_W = 0.4;
 const HIST_MAX = 200;
+// Calibración de stats: actuals por partido pendientes de guardar (se vacían en statsSeed).
+let PEND_ACT = [];
+let SP_COLS_OK = false;
+async function ensureSpCols() {
+  if (SP_COLS_OK) return;
+  try {
+    await dbq('alter table preds add column if not exists sp jsonb', [], 8000);
+    await dbq('alter table preds add column if not exists sp_actual jsonb', [], 8000);
+    SP_COLS_OK = true;
+  } catch (e) { /* best-effort */ }
+}
+async function flushActuals() {
+  if (!PEND_ACT.length) return;
+  const batch = PEND_ACT; PEND_ACT = [];
+  try {
+    await ensureSpCols();
+    const vals = [], params = [];
+    batch.forEach(function (r, i) {
+      vals.push('($' + (i * 2 + 1) + ',$' + (i * 2 + 2) + '::jsonb)');
+      params.push(r.id, JSON.stringify(r.act));
+    });
+    await dbq('insert into preds (id, sp_actual) values ' + vals.join(',') +
+      ' on conflict (id) do update set sp_actual = coalesce(preds.sp_actual, excluded.sp_actual)', params, 10000);
+  } catch (e) { /* best-effort: se reintenta con el próximo boxscore */ }
+}
 // Matcheo difuso de nombres para ratings: los nombres de ESPN no siempre coinciden
 // con los de football-data ("SC Internacional" vs "Internacional") y sin esto los
 // equipos caen al pool por defecto con n=0.
@@ -134,6 +159,20 @@ async function statsSeed(now) {
           if (bumpAllowed(STATS, arr[0].name, arr[1].o)) ch = true;
           if (bumpAllowed(STATS, arr[1].name, arr[0].o)) ch = true;
         }
+        // Actuals por partido (para calibrar los picks de stats): totales y por equipo.
+        // Solo partidos terminados (goles de ambos presentes). Se vacían en statsSeed.
+        const mEv = (ev.path.match(/event=([0-9]+)/) || [])[1];
+        if (mEv && arr.length === 2 && arr[0].o.gf != null && arr[1].o.gf != null) {
+          const H = arr[0].home ? arr[0] : arr[1], A = arr[0].home ? arr[1] : arr[0];
+          const act = { t: {}, h: {}, a: {} };
+          SPK.forEach(function (pr) {
+            const k = pr[0], hv = H.o[k], av = A.o[k];
+            if (hv != null && av != null && isFinite(hv) && isFinite(av)) {
+              act.h[k] = hv; act.a[k] = av; act.t[k] = Math.round((hv + av) * 10) / 10;
+            }
+          });
+          if (Object.keys(act.t).length) PEND_ACT.push({ id: 'espn:' + mEv, act: act });
+        }
         return ch;
       })
       .catch(function () { clearTimeout(t); return false; });
@@ -163,7 +202,7 @@ async function statsSeed(now) {
       } else {
         seedMark('L5:' + up.id); // ya estaba todo colectado
       }
-      await kvSave('es:stats', STATS); await kvSave('es:seeded', SEEDED);
+      await kvSave('es:stats', STATS); await kvSave('es:seeded', SEEDED); await flushActuals();
     }
     // Si el summary falló, no se marca: se reintenta en el próximo ciclo.
     return; // 1 unidad de trabajo por request
@@ -187,7 +226,7 @@ async function statsSeed(now) {
   if (!m0) return;
   const code = String(m0.competition.id).slice(5), ev = String(m0.id).slice(5);
   const ok = await colecta({ path: code + '/summary?event=' + ev });
-  if (ok) { seedMark(m0.id); await kvSave('es:stats', STATS); await kvSave('es:seeded', SEEDED); }
+  if (ok) { seedMark(m0.id); await kvSave('es:stats', STATS); await kvSave('es:seeded', SEEDED); await flushActuals(); }
   // Si falla, no se marca: se reintenta en el próximo ciclo.
 }
 
@@ -498,6 +537,21 @@ export default async function handler(req, res) {
     if (detailId) {
       const one = out.find(function (p) { return String(p.id) === detailId; });
       if (!one) return res.status(404).json({ ok: false, error: 'partido no encontrado' });
+      // Calibración de stats: guardar los picks de stats la primera vez que se ven,
+      // siempre pre-partido (para un partido ya jugado el sp se calculó con datos
+      // posteriores y no sirve). Best-effort: no bloquea el modal si falla.
+      try {
+        if (one.sp && Array.isArray(one.sp) && one.time && new Date(one.time).getTime() > Date.now()) {
+          const picks = one.sp.filter(function (r) { return r && r.k && r.k !== 'pos' && r.line != null && r.p != null; })
+            .map(function (r) { return { k: r.k, line: r.line, dir: String(r.pick || '').indexOf('Más') === 0 ? 'o' : 'u', p: r.p }; });
+          if (picks.length) {
+            await ensureSpCols();
+            await dbq('insert into preds (id, home, away, league, sp) values ($1,$2,$3,$4,$5::jsonb)' +
+              ' on conflict (id) do update set sp = coalesce(preds.sp, excluded.sp)',
+              [String(one.id), one.home || null, one.away || null, one.league || null, JSON.stringify(picks)], 8000);
+          }
+        }
+      } catch (e) { /* best-effort */ }
       return res.status(200).json({ ok: true, prediction: one });
     }
     const light = req.query.light === '1';

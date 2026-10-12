@@ -10,6 +10,9 @@ async function ensure() {
   // A5: columnas para no perder sn/oddsClose al sincronizar (tablas ya creadas).
   await q('alter table preds add column if not exists sn double precision');
   await q('alter table preds add column if not exists odds_close jsonb');
+  // Calibración de stats: picks de stats (sp) y sus valores reales (sp_actual).
+  await q('alter table preds add column if not exists sp jsonb');
+  await q('alter table preds add column if not exists sp_actual jsonb');
   ready = true;
 }
 

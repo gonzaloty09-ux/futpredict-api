@@ -201,7 +201,10 @@ export function buildProbs(hL, aL, sampleN, rho) {
   }
   sc.forEach(function (x) { x.p /= tot; });
   sc.sort(function (x, y) { return y.p - x.p; });
-  const s = sampleN / (sampleN + 4); const b = 100 / 3;
+  // Shrinkage hacia uniforme (33.3%): con poca muestra las probs crudas son ruidosas.
+  // Calibración medida (n=298, 2026-10-12): el modelo decía 38% y acertaba 41% (+3pp
+  // conservador). El prior de +4 era demasiado fuerte; +2 lo suaviza sin eliminarlo.
+  const s = sampleN / (sampleN + 2); const b = 100 / 3;
   let ph = Math.round(b + (hW / tot * 100 - b) * s);
   let pd = Math.round(b + (d / tot * 100 - b) * s);
   let pa = Math.round(b + (aW / tot * 100 - b) * s);
