@@ -1,5 +1,5 @@
 export const maxDuration = 20;
-import { dbq, slimMatches, mkHist, buildRatings, buildProbs, invLambda, normName, mapLeague, fd, fetchOdds, findOdds, isUpcoming, cors, cl, requireAuth } from './core.js';
+import { dbq, slimMatches, mkHist, buildRatings, buildProbs, invLambda, normName, mapLeague, fd, fetchOdds, findOdds, isUpcoming, cors, noCache, cl, requireAuth, rateLimitKV, clientIp } from './core.js';
 import { espnMatches, sameFixture, espnRefresh, espnRestore, espnHistFeeds, espnInfo, espnAggs, buildAggMap, compactAgg } from './espn.js';
 import { computeElo, eloLambda, buildH2H, h2hOf, leagueWeights, statPreds, bumpStats, bumpAllowed, perfFactor } from './pro.js';
 
@@ -31,17 +31,8 @@ function rGet(R, ix, nm) {
   const k = ix && ix[normName(nm)];
   return k ? R[k] : null;
 }
-// Rate limit por IP (ventana fija de 1 minuto, en memoria por instancia).
-const RL = {};
-function rateOk(req) {
-  const ip = String(((req.headers['x-forwarded-for'] || '') + '').split(',')[0] || 'x').trim();
-  const min = Math.floor(Date.now() / 60000);
-  if (Object.keys(RL).length > 800) { Object.keys(RL).forEach(function (k) { if (RL[k].min !== min) delete RL[k]; }); }
-  const e = RL[ip];
-  if (!e || e.min !== min) { RL[ip] = { min: min, n: 1 }; return true; }
-  e.n++;
-  return e.n <= 60;
-}
+// M1: rate limit persistente en kv (el de memoria por instancia no limita en serverless).
+// 60 req/min por IP, igual que antes pero efectivo entre instancias.
 
 async function kvSave(k, v) {
   try { await dbq('insert into kv (k, v, ts) values ($1, $2::jsonb, now()) on conflict (k) do update set v = excluded.v, ts = now()', [k, JSON.stringify(v)], 8000); } catch (e) { KV_ERR = String((e && e.message) || e); }
@@ -75,11 +66,28 @@ async function kvLoad(now) {
     });
   } catch (e) { KV_ERR = String((e && e.message) || e); KV_LOADED = 0; }
 }
+// A3: seeding INCREMENTAL — 1 unidad de trabajo por request en vez de la tormenta de
+// 60+ fetches dentro de un function de 20s (el frontend aborta a los 12s y ese trabajo
+// se desperdiciaba, además del riesgo de 504). Entre instancias y ciclos de 20s el
+// llenado avanza solo sin saturar.
+// M3: compactar SEEDED por recencia (las claves guardan timestamp) en vez de vaciarlo:
+// vaciarlo y persistirlo borraba el progreso de TODAS las instancias. Los valores
+// viejos `1` se tratan como timestamp 0 (los más viejos, se compactan primero).
+function seedMark(id) { SEEDED[id] = Date.now(); }
+function seedSeen(id) { return !!SEEDED[id]; }
+function seedCompact() {
+  const keys = Object.keys(SEEDED);
+  if (keys.length <= 4000) return false;
+  keys.sort(function (a, b) { return (SEEDED[a] || 0) - (SEEDED[b] || 0); });
+  const drop = keys.slice(0, keys.length - 4000);
+  for (let i = 0; i < drop.length; i++) delete SEEDED[drop[i]];
+  return true;
+}
 async function statsSeed(now) {
   if (now - SEED_TS < 20000) return;
   SEED_TS = now;
   if (!SEEDED) SEEDED = {};
-  if (Object.keys(SEEDED).length > 4000) SEEDED = {};
+  if (seedCompact()) await kvSave('es:seeded', SEEDED);
   const colecta = function (ev) {
     const c = new AbortController(); const t = setTimeout(function () { c.abort(); }, 6000);
     return fetch('https://site.api.espn.com/apis/site/v2/sports/soccer/' + ev.path, { signal: c.signal })
@@ -131,70 +139,75 @@ async function statsSeed(now) {
       .catch(function () { clearTimeout(t); return false; });
   };
 
-  // Fase 1: partidos proximos con algun equipo sin datos -> colectar los ultimos 5 de cada uno
-  // (el summary del proximo expone los IDs de esos 10 partidos; cada boxscore aporta stats de 2 equipos).
-  // Solo se marca como hecho si la colecta tuvo exito: los fallidos se reintentan en el proximo ciclo.
+  // Unidad de trabajo 1: UN partido próximo con algún equipo sin datos → sus últimos 5.
+  // (El summary expone los IDs; cada boxscore aporta stats de 2 equipos.)
+  // Solo se marca como hecho si la colecta tuvo éxito: los fallidos se reintentan.
   const necesita = function (nm) { const s = STATS[nm]; return !s || (s.sh || []).length < 3; };
   const up = espnMatches()
-    .filter(function (m) { return (m.status === 'SCHEDULED' || m.status === 'IN_PLAY') && (necesita(m.homeTeam.name) || necesita(m.awayTeam.name)); })
-    .sort(function (a, b) { return (a.utcDate || '').localeCompare(b.utcDate || ''); })
-    .slice(0, 6);
-  for (const m of up) {
-    if (SEEDED['L5:' + m.id]) continue;
-    const code = String(m.competition.id).slice(5);
-    const sum = await fetch('https://site.api.espn.com/apis/site/v2/sports/soccer/' + code + '/summary?event=' + String(m.id).slice(5)).then(function (x) { return x.ok ? x.json() : null; }).catch(function () { return null; });
-    if (!sum || !sum.lastFiveGames) continue;
-    const ids = [];
-    sum.lastFiveGames.forEach(function (e) {
-      (e.events || []).forEach(function (ev) { if (ev.id && ids.indexOf(String(ev.id)) === -1) ids.push(String(ev.id)); });
-    });
-    if (!ids.length) continue;
-    const res = await Promise.all(ids.slice(0, 10).map(function (gid) {
-      if (SEEDED['g:' + gid]) return Promise.resolve(false);
-      return colecta({ path: code + '/summary?event=' + gid }).then(function (ok) { if (ok) SEEDED['g:' + gid] = 1; return ok; });
-    }));
-    if (res.some(function (x) { return x; })) SEEDED['L5:' + m.id] = 1;
-    await kvSave('es:stats', STATS); await kvSave('es:seeded', SEEDED);
+    .filter(function (m) { return (m.status === 'SCHEDULED' || m.status === 'IN_PLAY') && (necesita(m.homeTeam.name) || necesita(m.awayTeam.name)) && !seedSeen('L5:' + m.id); })
+    .sort(function (a, b) { return (a.utcDate || '').localeCompare(b.utcDate || ''); })[0];
+  if (up) {
+    const code = String(up.competition.id).slice(5);
+    const sum = await fetch('https://site.api.espn.com/apis/site/v2/sports/soccer/' + code + '/summary?event=' + String(up.id).slice(5)).then(function (x) { return x.ok ? x.json() : null; }).catch(function () { return null; });
+    if (sum && sum.lastFiveGames) {
+      const ids = [];
+      sum.lastFiveGames.forEach(function (e) {
+        (e.events || []).forEach(function (ev) { if (ev.id && ids.indexOf(String(ev.id)) === -1) ids.push(String(ev.id)); });
+      });
+      const todo = ids.filter(function (gid) { return !seedSeen('g:' + gid); }).slice(0, 10);
+      if (todo.length) {
+        const res = await Promise.all(todo.map(function (gid) {
+          return colecta({ path: code + '/summary?event=' + gid }).then(function (ok) { if (ok) seedMark('g:' + gid); return ok; });
+        }));
+        if (res.some(function (x) { return x; })) seedMark('L5:' + up.id);
+      } else {
+        seedMark('L5:' + up.id); // ya estaba todo colectado
+      }
+      await kvSave('es:stats', STATS); await kvSave('es:seeded', SEEDED);
+    }
+    // Si el summary falló, no se marca: se reintenta en el próximo ciclo.
+    return; // 1 unidad de trabajo por request
   }
 
-  // Fase 2: partidos finalizados directamente (llenado general).
-  const cands = espnMatches()
-    .filter(function (m) { return m.status === 'FINISHED' && m.score && m.score.fullTime && m.score.fullTime.home != null && !SEEDED[m.id]; });
+  // Unidad de trabajo 2: UN partido finalizado (llenado general, priorizando equipos con próximos).
   const upTeams = {};
   espnMatches().forEach(function (m) {
     if (m.status !== 'SCHEDULED' && m.status !== 'IN_PLAY') return;
     upTeams[m.homeTeam.name] = 1; upTeams[m.awayTeam.name] = 1;
   });
-  cands.sort(function (a, b) {
-    const ua = (upTeams[a.homeTeam.name] || upTeams[a.awayTeam.name]) ? 1 : 0;
-    const ub = (upTeams[b.homeTeam.name] || upTeams[b.awayTeam.name]) ? 1 : 0;
-    if (ua !== ub) return ub - ua;
-    return (b.utcDate || '').localeCompare(a.utcDate || '');
-  });
-  const list = cands.slice(0, 12);
-  if (!list.length) return;
-  let ch = false;
-  await Promise.all(list.map(function (m) {
-    const code = String(m.competition.id).slice(5), ev = String(m.id).slice(5);
-    SEEDED[m.id] = 1;
-    return colecta({ path: code + '/summary?event=' + ev }).then(function (c) { if (c) ch = true; });
-  }));
-  if (ch) { await kvSave('es:stats', STATS); await kvSave('es:seeded', SEEDED); }
+  const cands = espnMatches()
+    .filter(function (m) { return m.status === 'FINISHED' && m.score && m.score.fullTime && m.score.fullTime.home != null && !seedSeen(m.id); })
+    .sort(function (a, b) {
+      const ua = (upTeams[a.homeTeam.name] || upTeams[a.awayTeam.name]) ? 1 : 0;
+      const ub = (upTeams[b.homeTeam.name] || upTeams[b.awayTeam.name]) ? 1 : 0;
+      if (ua !== ub) return ub - ua;
+      return (b.utcDate || '').localeCompare(a.utcDate || '');
+    });
+  const m0 = cands[0];
+  if (!m0) return;
+  const code = String(m0.competition.id).slice(5), ev = String(m0.id).slice(5);
+  const ok = await colecta({ path: code + '/summary?event=' + ev });
+  if (ok) { seedMark(m0.id); await kvSave('es:stats', STATS); await kvSave('es:seeded', SEEDED); }
+  // Si falla, no se marca: se reintenta en el próximo ciclo.
 }
 
 export default async function handler(req, res) {
   cors(res);
-  res.setHeader('Cache-Control', 's-maxage=60, stale-while-revalidate=300');
   if (req.method === 'OPTIONS') return res.status(200).end();
   if (!requireAuth(req, res)) return;
+  noCache(res); // C1: private, no-store, DESPUÉS del chequeo de auth (nunca antes)
   if (req.method !== 'GET') return res.status(405).json({ ok: false, error: 'method' });
-  if (!rateOk(req)) return res.status(429).json({ ok: false, error: 'rate limit: esperá un momento y recargá' });
+  // M1: rate limit persistente en kv (60/min por IP, efectivo entre instancias).
+  const rl = await rateLimitKV('rl:pred:' + clientIp(req), 60, 60000);
+  if (!rl.allowed) return res.status(429).json({ ok: false, error: 'rate limit: esperá un momento y recargá' });
   const token = process.env.FOOTBALL_DATA_TOKEN;
   const oddsKey = process.env.ODDS_API_KEY || null;
   if (!token) return res.status(500).json({ ok: false, error: 'Falta FOOTBALL_DATA_TOKEN' });
   try {
     const now = Date.now();
     const qDate = req.query.date || null;
+    // M9: fecha inválida → 400, no 500 (Invalid Date rompía toISOString).
+    if (qDate && !/^\d{4}-\d{2}-\d{2}$/.test(qDate)) return res.status(400).json({ ok: false, error: 'date inválida (YYYY-MM-DD)' });
     const base = qDate ? new Date(qDate + 'T12:00:00Z') : new Date();
     const from = new Date(base.getTime() - 3 * 86400000).toISOString().split('T')[0];
     const to = new Date(base.getTime() + 6 * 86400000).toISOString().split('T')[0];
@@ -410,6 +423,10 @@ export default async function handler(req, res) {
         return now - e.ts > ttl;
       });
       need.sort(function (a, b) { return (soonN[b] || 0) - (soonN[a] || 0); });
+      // B10: condición de carrera aceptada y documentada — dos instancias pueden leer el mismo
+      // ODDS_LEFT y gastar por encima del umbral de 60. El margen es de unas pocas requests y el
+      // umbral es un colchón de seguridad (el plan gratuito da 500/mes), no un límite duro.
+      // Un update atómico real exigiría un contador dedicado; no vale la complejidad para un solo usuario.
       const budgetOk = ODDS_LEFT === null || ODDS_LEFT >= 60 || (now - ODDS_LEFT_TS > 24 * 60 * 60 * 1000);
       if (budgetOk) {
         await Promise.all(need.slice(0, 2).map(function (s) {
@@ -474,8 +491,26 @@ export default async function handler(req, res) {
       const e = HIST[cid];
       histInfo[compName[cid] || cid] = e ? (e.ok ? { ok: true, partidos: e.count } : { ok: false, err: e.err || 'sin datos' }) : { ok: false, err: 'aun no consultado' };
     }
-    res.status(200).json({ ok: true, parser: 'v21', hist: histInfo, kv: KV_ERR || 'ok', count: out.length, window: { from, to }, oddsEnabled: !!oddsKey, oddsLeft: ODDS_LEFT, espn: espnInfo(), statsTeams: Object.keys(STATS).length, predictions: out, generated: new Date().toISOString() });
+    // M15: ?detail=<id> devuelve UN pronóstico completo (para el modal); ?light=1
+    // recorta los campos pesados (sp/h2h/aggH/aggA) que solo usa el modal.
+    // Mismo endpoint = mismos cachés en memoria (un endpoint separado no los compartiría).
+    const detailId = req.query.detail ? String(req.query.detail) : null;
+    if (detailId) {
+      const one = out.find(function (p) { return String(p.id) === detailId; });
+      if (!one) return res.status(404).json({ ok: false, error: 'partido no encontrado' });
+      return res.status(200).json({ ok: true, prediction: one });
+    }
+    const light = req.query.light === '1';
+    const list = light ? out.map(function (p) {
+      const c = Object.assign({}, p);
+      delete c.sp; delete c.h2h; delete c.aggH; delete c.aggA;
+      return c;
+    }) : out;
+    // B6: versión visible unificada a v26. M13: se exponen errors para mostrarlos en la UI.
+    res.status(200).json({ ok: true, parser: 'v26', hist: histInfo, kv: KV_ERR || 'ok', count: list.length, window: { from, to }, oddsEnabled: !!oddsKey, oddsLeft: ODDS_LEFT, espn: espnInfo(), statsTeams: Object.keys(STATS).length, predictions: list, errors: FD_ERRS, generated: new Date().toISOString() });
   } catch (e) {
-    res.status(500).json({ ok: false, error: String(e.message || e) });
+    // M6: no exponer mensajes internos en el 500.
+    console.error('api/predictions', e);
+    res.status(500).json({ ok: false, error: 'error interno' });
   }
 }

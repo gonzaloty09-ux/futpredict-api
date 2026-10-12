@@ -31,10 +31,18 @@ export function slimMatches(ms) {
     return { utcDate: m.utcDate, homeTeam: { name: m.homeTeam.name }, awayTeam: { name: m.awayTeam.name }, score: { fullTime: ft } };
   });
 }
-export function cors(res) {
-  res.setHeader('Access-Control-Allow-Origin', '*');
-  res.setHeader('Access-Control-Allow-Methods', 'GET,OPTIONS');
+export function cors(res, methods) {
+  // La app es same-origin (fetch a rutas relativas): no se emite
+  // Access-Control-Allow-Origin. Sin '*' no hay lectura cross-origin.
+  res.setHeader('Access-Control-Allow-Methods', methods || 'GET,OPTIONS');
   res.setHeader('Access-Control-Allow-Headers', 'Content-Type');
+}
+// Cache-Control para endpoints con requireAuth: nunca caché compartida.
+// Se fija DESPUÉS del chequeo de auth (ver C1): la clave de caché del edge
+// es URL+query y no incluye la cookie, así que un s-maxage/public podría
+// servir datos privados a visitantes sin contraseña (o un 401 cacheado al dueño).
+export function noCache(res) {
+  res.setHeader('Cache-Control', 'private, no-store');
 }
 export function cl(v, a, b) { return Math.max(a, Math.min(b, v)); }
 export function normName(s) {
@@ -43,6 +51,50 @@ export function normName(s) {
       return { á: 'a', à: 'a', ä: 'a', â: 'a', é: 'e', è: 'e', ë: 'e', ê: 'e', í: 'i', ì: 'i', ï: 'i', î: 'i', ó: 'o', ò: 'o', ö: 'o', ô: 'o', ú: 'u', ù: 'u', ü: 'u', û: 'u', ñ: 'n', ç: 'c' }[c] || c;
     })
     .replace(/[^a-z0-9 ]/g, '').replace(/\s+/g, ' ').trim();
+}
+// Alias de nombres cortos (football-data.co.uk y otras fuentes usan variantes
+// que no cruzan por substring con el nombre oficial). Centralizado aquí para
+// que todas las fuentes normalicen igual (antes solo statshist lo tenía).
+const NAME_ALIAS = {
+  'man united': 'manchester united', 'man utd': 'manchester united', 'man city': 'manchester city',
+  'spurs': 'tottenham', 'wolves': 'wolverhampton', "nott'm forest": 'nottingham forest',
+  'nottm forest': 'nottingham forest', 'newcastle': 'newcastle united', 'leicester': 'leicester city',
+  'west brom': 'west bromwich albion', 'sheffield utd': 'sheffield united', 'qpr': 'queens park rangers'
+};
+export function normNameAlias(s) {
+  const n = normName(s);
+  return NAME_ALIAS[n] || n;
+}
+// Parser CSV: una línea respetando comillas (stats.js).
+export function parseCSVLine(line) {
+  const out = [];
+  let cur = '', inQ = false;
+  for (let i = 0; i < line.length; i++) {
+    const ch = line[i];
+    if (ch === '"') {
+      if (inQ && line[i + 1] === '"') { cur += '"'; i++; }
+      else inQ = !inQ;
+    } else if (ch === ',' && !inQ) { out.push(cur); cur = ''; }
+    else cur += ch;
+  }
+  out.push(cur);
+  return out;
+}
+// Parser CSV: texto completo respetando comillas y saltos (statshist.js).
+export function parseCSV(text) {
+  const rows = []; let row = []; let field = ''; let inQ = false;
+  for (let i = 0; i < text.length; i++) {
+    const c = text[i];
+    if (inQ) {
+      if (c === '"') { if (text[i + 1] === '"') { field += '"'; i++; } else inQ = false; }
+      else field += c;
+    } else if (c === '"') inQ = true;
+    else if (c === ',') { row.push(field); field = ''; }
+    else if (c === '\n' || c === '\r') { if (field !== '' || row.length) { row.push(field); rows.push(row); } row = []; field = ''; }
+    else field += c;
+  }
+  if (field !== '' || row.length) { row.push(field); rows.push(row); }
+  return rows;
 }
 export function mapLeague(name) {
   const n = String(name).toLowerCase();
@@ -55,17 +107,19 @@ export function mapLeague(name) {
   if (n.indexOf('serie a') !== -1) return 'soccer_italy_serie_a';
   if (n.indexOf('bundesliga') !== -1) return 'soccer_germany_bundesliga';
   if (n.indexOf('ligue 1') !== -1) return 'soccer_france_ligue_one';
+  // OJO: "championship" contiene a "champions" como subcadena: el orden importa.
+  // La Eurocopa ("european championship") también contiene "championship".
+  if (n.indexOf('euro') !== -1 && n.indexOf('championship') !== -1) return 'soccer_uefa_european_championship';
+  if (n.indexOf('championship') !== -1) return 'soccer_efl_champ';
   if (n.indexOf('champions') !== -1) return 'soccer_uefa_champs_league';
   if (n.indexOf('europa league') !== -1) return 'soccer_uefa_europa_league';
   if (n.indexOf('eredivisie') !== -1) return 'soccer_netherlands_eredivisie';
   if (n.indexOf('primeira liga') !== -1) return 'soccer_portugal_primeira_liga';
-  if (n.indexOf('championship') !== -1) return 'soccer_efl_champ';
   if (n.indexOf('libertadores') !== -1) return 'soccer_conmebol_libertadores';
   if (n.indexOf('sudamericana') !== -1) return 'soccer_conmebol_sudamericana';
   if (n.indexOf('brasileiro') !== -1 || n.indexOf('brasileirão') !== -1) return 'soccer_brazil_campeonato';
   if (n.indexOf('mls') !== -1 || n.indexOf('major league soccer') !== -1) return 'soccer_usa_mls';
   if (n.indexOf('world cup') !== -1 || n.indexOf('mundial') !== -1) return 'soccer_fifa_world_cup';
-  if (n.indexOf('euro') !== -1 && n.indexOf('championship') !== -1) return 'soccer_uefa_european_championship';
   return null;
 }
 function factorial(n) { let r = 1; for (let i = 2; i <= n; i++) r *= i; return r; }
@@ -221,10 +275,14 @@ export function findOdds(list, fh, fa) {
 }
 export function isUpcoming(status) {
   const s = (status || '').toUpperCase();
-  return s.indexOf('FIN') !== 0 && s.indexOf('POST') !== 0;
+  // Alineado con normStatus del frontend: cancelados/suspendidos/pospuestos no son "próximos".
+  return s.indexOf('FIN') !== 0 && s.indexOf('POST') !== 0 && s.indexOf('CANC') !== 0 && s.indexOf('SUSP') !== 0;
 }
 // ---- Acceso privado: la app solo responde con la contrasena de SITE_PASSWORD ----
-const AUTH_COOKIE = 'fp_auth';
+// Prefijo __Host-: la cookie solo se acepta desde el host exacto, con Path=/ y sin Domain,
+// y exige Secure. Requiere HTTPS (Vercel lo es). NOTA: invalida la cookie 'fp_auth' anterior:
+// tras este deploy hay que volver a iniciar sesión una vez.
+const AUTH_COOKIE = '__Host-fp_auth';
 const AUTH_MSG = 'futpredict-auth-v1';
 export function sitePassword() { return process.env.SITE_PASSWORD || ''; }
 export function expectedAuthToken() {
@@ -234,7 +292,7 @@ export function expectedAuthToken() {
 }
 function cookieToken(req) {
   const raw = (req.headers && req.headers.cookie) || '';
-  const m = /(?:^|;\s*)fp_auth=([^;]+)/.exec(raw);
+  const m = /(?:^|;\s*)__Host-fp_auth=([^;]+)/.exec(raw);
   return m ? m[1] : null;
 }
 export function isAuthed(req) {
@@ -255,4 +313,45 @@ export function setAuthCookie(res) {
 }
 export function clearAuthCookie(res) {
   res.setHeader('Set-Cookie', AUTH_COOKIE + '=; Path=/; HttpOnly; SameSite=Lax; Secure; Max-Age=0');
+}
+// ---- Rate limiting persistente en Neon (A1/M1) ----
+// El rate limit en memoria por instancia no sirve en serverless (cada instancia
+// tiene su propio contador). Este usa la tabla `kv` compartida: funciona entre
+// instancias y sobrevive a cold starts.
+// Uso: rateLimitKV('rl:auth:'+ip, 10, 10*60*1000) -> {allowed, retryAfter}
+// Si el intento supera el máximo, cada intento extra alarga el bloqueo (tope 1h).
+// Si la DB falla, fail-open (no bloquear al dueño por un problema de infra).
+let KV_TABLE_READY = false;
+export async function kvEnsure() {
+  if (KV_TABLE_READY) return;
+  try {
+    await dbq('create table if not exists kv (k text primary key, v jsonb, ts timestamptz default now())', [], 5000);
+    KV_TABLE_READY = true;
+  } catch (e) { /* se reintenta en la próxima llamada */ }
+}
+export async function rateLimitKV(key, maxHits, windowMs) {
+  const now = Date.now();
+  try {
+    await kvEnsure();
+    const rows = await dbq('select v from kv where k = $1', [key], 3000);
+    let st = null;
+    if (rows.length && rows[0].v != null) {
+      try { st = typeof rows[0].v === 'string' ? JSON.parse(rows[0].v) : rows[0].v; } catch (e) { st = null; }
+    }
+    if (!st || typeof st.reset !== 'number' || st.reset <= now) st = { n: 0, reset: now + windowMs };
+    if (st.n >= maxHits) {
+      st.reset = Math.min(st.reset + windowMs, now + 3600000); // bloqueo creciente, tope 1h
+      await dbq('insert into kv (k, v, ts) values ($1, $2::jsonb, now()) on conflict (k) do update set v = excluded.v, ts = now()', [key, JSON.stringify(st)], 3000);
+      return { allowed: false, retryAfter: Math.max(1, Math.ceil((st.reset - now) / 1000)) };
+    }
+    st.n++;
+    await dbq('insert into kv (k, v, ts) values ($1, $2::jsonb, now()) on conflict (k) do update set v = excluded.v, ts = now()', [key, JSON.stringify(st)], 3000);
+    return { allowed: true, retryAfter: 0 };
+  } catch (e) { return { allowed: true, retryAfter: 0 }; }
+}
+export async function rateLimitReset(key) {
+  try { await dbq('delete from kv where k = $1', [key], 3000); } catch (e) {}
+}
+export function clientIp(req) {
+  return String(((req.headers['x-forwarded-for'] || '') + '').split(',')[0] || 'x').trim();
 }

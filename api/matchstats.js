@@ -1,19 +1,17 @@
-import { requireAuth } from './core.js';
+import { requireAuth, cors, noCache } from './core.js';
 // Stats reales de un partido (tiros, posesión, córners, faltas, amarillas) + últimos 5 de cada equipo.
 // Fuente: ESPN summary, gratis y sin key. Solo ligas ESPN (la UI manda league=<código> y event=<id>).
-const CORS = {
-  'Access-Control-Allow-Origin': '*',
-  'Access-Control-Allow-Methods': 'GET,OPTIONS',
-  'Access-Control-Allow-Headers': 'Content-Type',
-  'Cache-Control': 'public, max-age=120'
-};
+function setCors(res) {
+  cors(res); // M16: sin Access-Control-Allow-Origin '*' (app same-origin)
+}
 
 export default async function handler(req, res) {
   if (req.method === 'OPTIONS') {
-    Object.keys(CORS).forEach(function (k) { res.setHeader(k, CORS[k]); });
+    setCors(res);
     return res.status(204).end();
   }
   if (!requireAuth(req, res)) return;
+  noCache(res); // C1: private, no-store, DESPUÉS del chequeo de auth
   if (req.method !== 'GET') return res.status(405).json({ ok: false, error: 'method' });
 
   const league = String(req.query.league || '');
@@ -71,7 +69,7 @@ export default async function handler(req, res) {
       };
     }).filter(function (x) { return x.team; });
 
-    Object.keys(CORS).forEach(function (k) { res.setHeader(k, CORS[k]); });
+    setCors(res);
     return res.status(200).json({
       ok: true, started: started,
       home: home ? mapTeam(home) : null,
@@ -79,7 +77,7 @@ export default async function handler(req, res) {
       l5: l5
     });
   } catch (e) {
-    Object.keys(CORS).forEach(function (k) { res.setHeader(k, CORS[k]); });
+    setCors(res);
     return res.status(200).json({ ok: false, error: 'upstream' });
   }
 }

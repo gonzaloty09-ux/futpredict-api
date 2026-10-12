@@ -1,50 +1,37 @@
-import { requireAuth } from './core.js';
+import { requireAuth, cors, noCache, normName, parseCSVLine } from './core.js';
 const FPT = 'https://futpythontrader.com.br/api/download';
 
-function cors(res) {
-  res.setHeader('Access-Control-Allow-Origin', '*');
-  res.setHeader('Access-Control-Allow-Methods', 'GET,OPTIONS');
-  res.setHeader('Access-Control-Allow-Headers', 'Content-Type');
-}
-// Parser CSV que respeta campos entre comillas (evita el desastre de las comas internas)
-function parseLine(line) {
-  const out = [];
-  let cur = '', inQ = false;
-  for (let i = 0; i < line.length; i++) {
-    const ch = line[i];
-    if (ch === '"') {
-      if (inQ && line[i + 1] === '"') { cur += '"'; i++; }
-      else inQ = !inQ;
-    } else if (ch === ',' && !inQ) { out.push(cur); cur = ''; }
-    else cur += ch;
-  }
-  out.push(cur);
-  return out;
-}
-function normName(s) {
-  return String(s).toLowerCase()
-    .replace(/[áàäâéèëêíìïîóòöôúùüûñç]/g, function (c) {
-      return { á: 'a', à: 'a', ä: 'a', â: 'a', é: 'e', è: 'e', ë: 'e', ê: 'e', í: 'i', ì: 'i', ï: 'i', î: 'i', ó: 'o', ò: 'o', ö: 'o', ô: 'o', ú: 'u', ù: 'u', ü: 'u', û: 'u', ñ: 'n', ç: 'c' }[c] || c;
-    })
-    .replace(/[^a-z0-9 ]/g, '').replace(/\s+/g, ' ').trim();
+// M11: cors, normName y parseCSVLine centralizados en core.js (antes copias locales).
+function fptSeasons(calYear) {
+  // M4: temporadas dinámicas en vez de hardcodeadas. Año futbolístico corta en julio.
+  const now = new Date(); const y = now.getUTCFullYear(); const m = now.getUTCMonth() + 1;
+  if (calYear) return [String(y), String(y - 1)]; // Libertadores/Sudamericana: año calendario
+  const a = m >= 7 ? y : y - 1;
+  return [a + '-' + (a + 1), (a - 1) + '-' + a];
 }
 function statsSource(leagueName) {
   const n = String(leagueName).toLowerCase();
-  if (n.indexOf('premier league') !== -1) return { c: 'england', l: 'premier-league', s: ['2026-2027', '2025-2026'] };
-  if (n.indexOf('championship') !== -1) return { c: 'england', l: 'championship', s: ['2026-2027', '2025-2026'] };
-  if (n.indexOf('primera division') !== -1 || n.indexOf('la liga') !== -1) return { c: 'spain', l: 'laliga', s: ['2026-2027', '2025-2026'] };
-  if (n.indexOf('serie a') !== -1) return { c: 'italy', l: 'serie-a', s: ['2026-2027', '2025-2026'] };
-  if (n.indexOf('bundesliga') !== -1) return { c: 'germany', l: 'bundesliga', s: ['2026-2027', '2025-2026'] };
-  if (n.indexOf('ligue 1') !== -1) return { c: 'france', l: 'ligue-1', s: ['2026-2027', '2025-2026'] };
-  if (n.indexOf('eredivisie') !== -1) return { c: 'netherlands', l: 'eredivisie', s: ['2026-2027', '2025-2026'] };
-  if (n.indexOf('primeira liga') !== -1) return { c: 'portugal', l: 'liga-portugal', s: ['2026-2027', '2025-2026'] };
-  if (n.indexOf('champions') !== -1) return { c: 'europe', l: 'champions-league', s: ['2026-2027', '2025-2026'] };
-  if (n.indexOf('europa league') !== -1) return { c: 'europe', l: 'europa-league', s: ['2026-2027', '2025-2026'] };
-  if (n.indexOf('libertadores') !== -1) return { c: 'south-america', l: 'copa-libertadores', s: ['2026', '2025'] };
+  // M4: exclusiones como en mapLeague (antes "Bundesliga 2" recibía stats de Bundesliga 1).
+  if (n.indexOf('bundesliga 2') !== -1 || n.indexOf('2. bundesliga') !== -1) return null;
+  if (n.indexOf('serie b') !== -1 || n.indexOf('série b') !== -1) return null;
+  if (n.indexOf('ligue 2') !== -1) return null;
+  if (n.indexOf('laliga 2') !== -1 || n.indexOf('la liga 2') !== -1) return null;
+  if (n.indexOf('premier league') !== -1) return { c: 'england', l: 'premier-league' };
+  if (n.indexOf('championship') !== -1) return { c: 'england', l: 'championship' };
+  if (n.indexOf('primera division') !== -1 || n.indexOf('la liga') !== -1) return { c: 'spain', l: 'laliga' };
+  if (n.indexOf('serie a') !== -1) return { c: 'italy', l: 'serie-a' };
+  if (n.indexOf('bundesliga') !== -1) return { c: 'germany', l: 'bundesliga' };
+  if (n.indexOf('ligue 1') !== -1) return { c: 'france', l: 'ligue-1' };
+  if (n.indexOf('eredivisie') !== -1) return { c: 'netherlands', l: 'eredivisie' };
+  if (n.indexOf('primeira liga') !== -1) return { c: 'portugal', l: 'liga-portugal' };
+  if (n.indexOf('champions') !== -1) return { c: 'europe', l: 'champions-league' };
+  if (n.indexOf('europa league') !== -1) return { c: 'europe', l: 'europa-league' };
+  if (n.indexOf('libertadores') !== -1) return { c: 'south-america', l: 'copa-libertadores', cal: true };
   return null;
 }
 async function fetchStats(cfg, key) {
-  for (const season of cfg.s) {
+  const seasons = fptSeasons(cfg.cal);
+  for (const season of seasons) {
     try {
       const c = new AbortController(); const t = setTimeout(function () { c.abort(); }, 7000);
       const r = await fetch(FPT + '/' + cfg.c + '/' + cfg.l + '/' + season + '?api_key=' + key, { signal: c.signal });
@@ -53,7 +40,7 @@ async function fetchStats(cfg, key) {
       const text = await r.text();
       const lines = text.trim().split(/\r?\n/);
       if (lines.length < 2) continue;
-      const head = parseLine(lines[0]);
+      const head = parseCSVLine(lines[0]);
       const idx = {}; head.forEach(function (h, i) { idx[h.trim().toLowerCase()] = i; });
       function findCol(test) { for (const k in idx) { if (test(k)) return idx[k]; } return -1; }
       function pref(test) {
@@ -78,7 +65,7 @@ async function fetchStats(cfg, key) {
       if (cShH === -1 && cXgH === -1) continue;
       const agg = {};
       for (let i = 1; i < lines.length; i++) {
-        const col = parseLine(lines[i]);
+        const col = parseCSVLine(lines[i]);
         const hn = (col[cHome] || '').trim(), an = (col[cAway] || '').trim();
         if (!hn || !an) continue;
         function num(ci) { if (ci === -1 || ci === undefined) return null; const v = parseFloat(col[ci]); return isFinite(v) ? v : null; }
@@ -114,9 +101,9 @@ async function fetchStats(cfg, key) {
 
 export default async function handler(req, res) {
   cors(res);
-  res.setHeader('Cache-Control', 's-maxage=300');
   if (req.method === 'OPTIONS') return res.status(200).end();
   if (!requireAuth(req, res)) return;
+  noCache(res); // C1: private, no-store, DESPUÉS del chequeo de auth
   const key = process.env.FUTPYTHON_API_KEY;
   if (!key) return res.status(200).json({ ok: false, error: 'falta FUTPYTHON_API_KEY' });
   const league = String(req.query.league || '');
