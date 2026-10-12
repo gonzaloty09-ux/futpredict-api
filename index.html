@@ -73,6 +73,11 @@ h1{font-family:'Chakra Petch',sans-serif;font-size:1.65rem;font-weight:700;color
 .cx:hover{color:var(--p)}
 .mhead{font-family:'Chakra Petch',sans-serif;text-align:center;font-size:1rem;font-weight:600;color:var(--p);margin:2px 14px 14px;line-height:1.4}
 .rw{display:flex;justify-content:space-between;align-items:baseline;gap:14px;padding:8px 0;font-size:.76rem;border-bottom:1px dashed var(--line)}
+.dbar{display:flex;height:5px;border-radius:3px;overflow:hidden;background:rgba(255,255,255,.06);margin:-4px 0 8px}
+.dbar i{display:block;height:100%}
+.dbar .h{background:var(--s)}
+.dbar .a{background:var(--w)}
+.wn{font-weight:700;color:#fff}
 .rw:last-child{border:none}
 .rl{color:var(--t2);flex-shrink:0}
 .rv{font-weight:600;color:var(--p);text-align:right;font-variant-numeric:tabular-nums;line-height:1.45}
@@ -297,6 +302,24 @@ function aggRows(nm,a){if(!a||a[0]<3)return '';return '<div class="stt" style="m
  '<div class="rw"><span class="rl">Over 2.5 · BTTS</span><span class="rv">'+Math.round(a[3]/a[0]*100)+'% · '+Math.round(a[4]/a[0]*100)+'%</span></div>'+
  '<div class="rw"><span class="rl">Vallas invictas</span><span class="rv">'+a[5]+'/'+a[0]+'</span></div>';}
 function mRw(l,a,b){return '<div class="rw"><span class="rl">'+l+'</span><span class="rv">'+(a==null?'-':a)+' - '+(b==null?'-':b)+'</span></div>';}
+// Duelo visual local vs visita: barra comparativa + ganador en negrita. low=true si "menos es mejor" (faltas, amarillas).
+function duelRw(l,a,b,low){if(a==null||b==null)return mRw(l,a,b);
+  var x=+a,y=+b,t=x+y,ph=t?Math.round(x/t*100):50,pa=100-ph;
+  var hw=low?x<y:x>y,aw=low?y<x:y>x;
+  return '<div class="rw"><span class="rl">'+l+'</span><span class="rv">'+
+   '<span class="'+(hw?'wn':'')+'">'+a+'</span> - <span class="'+(aw?'wn':'')+'">'+b+'</span></span></div>'+
+   '<div class="dbar" aria-hidden="true"><i class="h" style="width:'+ph+'%"></i><i class="a" style="width:'+pa+'%"></i></div>';}
+// Veredicto del duelo en xG/tiros/a puerta/córners.
+function duelVerdict(h,a){if(!h||!a)return '';
+  var d=[['xG',h.xg,a.xg],['tiros',h.sh,a.sh],['a puerta',h.sot,a.sot],['córners',h.cor,a.cor]];
+  var wh=[],wa=[];
+  d.forEach(function(x){if(x[1]==null||x[2]==null)return;if(+x[1]>+x[2])wh.push(x[0]+' ('+x[1]+' vs '+x[2]+')');else if(+x[2]>+x[1])wa.push(x[0]+' ('+x[2]+' vs '+x[1]+')');});
+  if(!wh.length&&!wa.length)return '';
+  var t='📊 Duelo: ';
+  if(wh.length&&wa.length)t+='el local domina en '+wh.join(', ')+'; la visita en '+wa.join(', ')+'.';
+  else if(wh.length)t+='el local domina en todo: '+wh.join(', ')+'.';
+  else t+='la visita domina en todo: '+wa.join(', ')+'.';
+  return '<div class="note" style="color:var(--t);font-weight:600">'+esc(t)+'</div>';}
 function mseHTML(d){
   var h='';
   if(d.started&&d.home&&d.home.sh!=null){
@@ -379,8 +402,9 @@ function renderModal(m){var e=effL(m);var mk=markets(e.h,e.a);var pr=dispProbs(m
   var mp=Math.max(pr.home,pr.draw,pr.away);
   var aggHtml=aggRows(m.home,m.aggH)+aggRows(m.away,m.aggA);
   var stSec=m.stats?(
-    mRw('Tiros',m.stats.home.sh,m.stats.away.sh)+mRw('A puerta',m.stats.home.sot,m.stats.away.sot)+mRw('Córners',m.stats.home.cor,m.stats.away.cor)+
-    mRw('Faltas',m.stats.home.fou,m.stats.away.fou)+mRw('Amarillas',m.stats.home.yc,m.stats.away.yc)+mRw('xG',m.stats.home.xg,m.stats.away.xg))
+    duelVerdict(m.stats.home,m.stats.away)+
+    duelRw('xG',m.stats.home.xg,m.stats.away.xg)+duelRw('Tiros',m.stats.home.sh,m.stats.away.sh)+duelRw('A puerta',m.stats.home.sot,m.stats.away.sot)+duelRw('Córners',m.stats.home.cor,m.stats.away.cor)+
+    duelRw('Faltas',m.stats.home.fou,m.stats.away.fou,true)+duelRw('Amarillas',m.stats.home.yc,m.stats.away.yc,true))
    :(aggHtml?aggHtml
    :('<div class="rw"><span class="rl">Tiros/Córners/Faltas/xG</span><span class="rv">n/d — no los inventamos</span></div>'));
   var stT=m.stats?('📊 Stats reales (promedio '+(m.stats.src==='histórico'?'histórico':'temporada actual')+', n='+m.stats.home.n+')')
@@ -401,9 +425,9 @@ function renderModal(m){var e=effL(m);var mk=markets(e.h,e.a);var pr=dispProbs(m
    '<div class="rw"><span class="rl">Value</span><span class="rv">'+(m.value&&m.value.length?m.value.map(function(v){return v.side+' +'+v.edge+'%'+(v.kelly?' (stake '+v.kelly+'%)':'');}).join(', '):'—')+'</span></div>';
   var adjRows='<div class="row"><button class="btn" onclick="setAdj(\''+m.id+'\',\'h\')">−10% λ local</button><button class="btn" onclick="setAdj(\''+m.id+'\',\'a\')">−10% λ visita</button><button class="btn" onclick="setAdj(\''+m.id+'\',\'b\')">−10% ambos</button><button class="btn" onclick="setAdj(\''+m.id+'\',\'none\')">Quitar</button></div>';
   $('mb').innerHTML='<div class="mhead">📊 '+esc(m.home)+' vs '+esc(m.away)+'</div>'+
+   (stSec?col(stT,stSec,true):'')+
    col('🔮 Predicción',predRows,true)+
    col('📈 Goles',goalsRows,true)+
-   (stSec?col(stT,stSec,false):'')+ 
    (m.sp?col('📈 Predicción de estadísticas'+(m.sp[0].n<6?' (muestra chica, n='+m.sp[0].n+')':' (n='+m.sp[0].n+' por equipo)'),spHTML(m.sp),false):'')+
    (m.h2h&&m.h2h.length?col('🤝 Historial directo (H2H)',h2hHTML(m.h2h),false):'')+
    '<div id="mse"></div>'+ 
