@@ -146,6 +146,7 @@ details.sec>summary:hover{color:var(--p)}
   </div>
   <div class="note" id="dNote"></div>
   <div class="sec"><div class="stt">🎯 Calibración (¿acierta tanto como dice?)</div><div id="calib"></div></div>
+  <div class="sec"><div class="stt">🔍 Dónde se desvía mi modelo</div><div class="row"><button class="btn go" onclick="calibDeep()">Analizar mis resultados</button></div><div id="calibDeep"></div></div>
   <div class="sec"><div class="stt">🧪 Medir modelo (backtest por liga)</div><div class="row"><select id="btSel" class="btn" style="max-width:55%"></select><button class="btn go" onclick="btRun()">Medir</button></div><div id="btOut"></div></div>
   <div class="row"><button class="btn go" onclick="exportCSV()">⬇️ Exportar historial CSV</button></div>
 </div>
@@ -465,6 +466,24 @@ fetch('api/backtest?cid='+encodeURIComponent(c)).then(function(r){return r.json(
  '<div class="note">Si Brier modelo &lt; Brier azar, el modelo aporta información real en esa liga.</div>'+
  (d.nota?'<div class="note">'+esc(d.nota)+'</div>':'');
 }).catch(function(e){$('btOut').innerHTML='<div class="note">⚠️ '+esc(String(e))+'</div>';});}
+function calibDeep(){$('calibDeep').innerHTML='<div class="note">⏳ Analizando tus pronósticos vs resultados…</div>';
+fetch('api/calibration').then(function(r){return r.json();}).then(function(d){
+ if(!d.ok){$('calibDeep').innerHTML='<div class="note">⚠️ '+esc(d.error||'sin datos')+'</div>';return;}
+ var h='';
+ (d.conclusiones||[]).forEach(function(c){h+='<div class="note">🔎 '+esc(c)+'</div>';});
+ h+='<div class="stt" style="margin-top:.4rem">Por rango de confianza</div>';
+ (d.buckets||[]).forEach(function(b){h+='<div class="rw"><span class="rl">'+esc(b.range)+' (n='+b.n+')</span><span class="rv">'+(b.n?'dice '+b.dice+'% · acertó '+b.acierta+'%':'—')+'</span></div>';});
+ h+='<div class="stt" style="margin-top:.4rem">Por tipo de pick</div>';
+ (d.porPick||[]).forEach(function(p){h+='<div class="rw"><span class="rl">'+esc(p.pick)+' (n='+p.n+')</span><span class="rv">'+(p.n?'dice '+p.dice+'% · acertó '+p.acierta+'%':'—')+'</span></div>';});
+ if(d.ligas&&d.ligas.length){h+='<div class="stt" style="margin-top:.4rem">Ligas con más desvío</div>';
+ d.ligas.forEach(function(l){h+='<div class="rw"><span class="rl">'+esc(l.liga)+' (n='+l.n+')</span><span class="rv">dice '+l.dice+'% · acertó '+l.acierta+'%</span></div>';});}
+ var f=d.fuentes;
+ if(f&&f.mezcla&&f.mezcla.n){h+='<div class="stt" style="margin-top:.4rem">Mezcla vs modelo vs mercado</div>';
+ [['mezcla','Tu mezcla'],['modelo','Modelo puro'],['mercado','Mercado']].forEach(function(k){var s=f[k[0]];h+='<div class="rw"><span class="rl">'+k[1]+' (n='+s.n+')</span><span class="rv">dice '+s.dice+'% · acertó '+s.acierta+'% · Brier '+s.brier+'</span></div>';});}
+ if(d.clvPromedio!=null)h+='<div class="rw"><span class="rl">CLV promedio</span><span class="rv">'+(d.clvPromedio>=0?'+':'')+d.clvPromedio+'%</span></div>';
+ h+='<div class="note">n='+d.n+' partidos terminados. Con n chico los desvíos son ruido.</div>';
+ $('calibDeep').innerHTML=h;
+}).catch(function(e){$('calibDeep').innerHTML='<div class="note">⚠️ '+esc(String(e))+'</div>';});}
 function oddsMove(o,c){if(!o||!c)return 0;var m=0;['h','d','a'].forEach(function(k){if(o[k]&&c[k])m=Math.max(m,Math.abs(c[k]/o[k]-1));});return m;}
 function hist(){var p=Object.values(DB.preds);if(!p.length){$('hlist').innerHTML='<div class="note">📭 Sin registros.</div>';return;}
   var PK={home:'1 Local',draw:'X Empate',away:'2 Visita'};
