@@ -1,4 +1,6 @@
+import { requireAuth } from './core.js';
 export default async function handler(req, res) {
+  if (!requireAuth(req, res)) return;
   const key = process.env.APIFOOTBALL_KEY;
   if (!key) return res.status(500).json({ error: 'Falta APIFOOTBALL_KEY' });
   const q = req.query.q || 'Nations League';

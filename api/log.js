@@ -1,3 +1,4 @@
+import { requireAuth } from './core.js';
 let ready = false;
 
 function cors(res) {
@@ -92,6 +93,7 @@ async function save(list) {
 export default async function handler(req, res) {
   cors(res);
   if (req.method === 'OPTIONS') return res.status(200).end();
+  if (!requireAuth(req, res)) return;
   try {
     await ensure();
     const action = (req.query && req.query.action) || 'list';

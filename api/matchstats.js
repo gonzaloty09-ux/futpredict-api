@@ -1,3 +1,4 @@
+import { requireAuth } from './core.js';
 // Stats reales de un partido (tiros, posesión, córners, faltas, amarillas) + últimos 5 de cada equipo.
 // Fuente: ESPN summary, gratis y sin key. Solo ligas ESPN (la UI manda league=<código> y event=<id>).
 const CORS = {
@@ -12,6 +13,7 @@ export default async function handler(req, res) {
     Object.keys(CORS).forEach(function (k) { res.setHeader(k, CORS[k]); });
     return res.status(204).end();
   }
+  if (!requireAuth(req, res)) return;
   if (req.method !== 'GET') return res.status(405).json({ ok: false, error: 'method' });
 
   const league = String(req.query.league || '');

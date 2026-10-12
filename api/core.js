@@ -1,3 +1,4 @@
+import { createHmac, timingSafeEqual } from 'node:crypto';
 // Utilidades del modelo: DB, ratings Dixon-Coles, Poisson, mapeo de ligas, cuotas.
 export const DECAY_D = 60;
 
@@ -221,4 +222,37 @@ export function findOdds(list, fh, fa) {
 export function isUpcoming(status) {
   const s = (status || '').toUpperCase();
   return s.indexOf('FIN') !== 0 && s.indexOf('POST') !== 0;
+}
+// ---- Acceso privado: la app solo responde con la contrasena de SITE_PASSWORD ----
+const AUTH_COOKIE = 'fp_auth';
+const AUTH_MSG = 'futpredict-auth-v1';
+export function sitePassword() { return process.env.SITE_PASSWORD || ''; }
+export function expectedAuthToken() {
+  const pw = sitePassword();
+  if (!pw) return null;
+  return createHmac('sha256', pw).update(AUTH_MSG).digest('hex');
+}
+function cookieToken(req) {
+  const raw = (req.headers && req.headers.cookie) || '';
+  const m = /(?:^|;\s*)fp_auth=([^;]+)/.exec(raw);
+  return m ? m[1] : null;
+}
+export function isAuthed(req) {
+  const exp = expectedAuthToken();
+  if (!exp) return false;
+  const got = cookieToken(req);
+  if (!got) return false;
+  const a = Buffer.from(got, 'utf8'), b = Buffer.from(exp, 'utf8');
+  return a.length === b.length && timingSafeEqual(a, b);
+}
+export function requireAuth(req, res) {
+  if (isAuthed(req)) return true;
+  res.status(401).json({ ok: false, error: 'no autorizado' });
+  return false;
+}
+export function setAuthCookie(res) {
+  res.setHeader('Set-Cookie', AUTH_COOKIE + '=' + expectedAuthToken() + '; Path=/; HttpOnly; SameSite=Lax; Secure; Max-Age=' + (30 * 24 * 3600));
+}
+export function clearAuthCookie(res) {
+  res.setHeader('Set-Cookie', AUTH_COOKIE + '=; Path=/; HttpOnly; SameSite=Lax; Secure; Max-Age=0');
 }

@@ -1,3 +1,4 @@
+import { requireAuth } from './core.js';
 // Historial multi-temporada de Football-Data.co.uk (CSV gratis, sin clave, sin límite de peticiones).
 // Se usa como RESPALDO cuando la temporada actual (FutPythonTrader) todavía no tiene muestra suficiente
 // para un equipo. Si esta fuente falla, el endpoint responde ok:false y no rompe nada.
@@ -119,6 +120,7 @@ function aggregate(allRows) {
 export default async function handler(req, res) {
   cors(res);
   if (req.method === 'OPTIONS') return res.status(200).end();
+  if (!requireAuth(req, res)) return;
   const league = (req.query.league || '').toLowerCase().trim();
   const code = CODE[league];
   if (!code) return res.status(200).json({ ok: false, error: 'liga sin código de football-data.co.uk' });

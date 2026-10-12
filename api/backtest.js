@@ -2,10 +2,11 @@
 // SOLO con partidos anteriores a cada uno (sin mirar el futuro) y mide Brier/log-loss/precisión.
 // Uso: /api/backtest?cid=espn:bra.1  o  cid=PD1 (código football-data). Sin cache de probas: es medición honesta.
 export const maxDuration = 20;
-import { dbq, buildRatings, buildProbs, cl, cors } from './core.js';
+import { dbq, buildRatings, buildProbs, cl, cors, requireAuth } from './core.js';
 
 export default async function handler(req, res) {
   cors(res);
+  if (!requireAuth(req, res)) return;
   res.setHeader('Cache-Control', 'public, max-age=600');
   if (req.method === 'OPTIONS') return res.status(200).end();
   if (req.method !== 'GET') return res.status(405).json({ ok: false, error: 'method' });

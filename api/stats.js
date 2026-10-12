@@ -1,3 +1,4 @@
+import { requireAuth } from './core.js';
 const FPT = 'https://futpythontrader.com.br/api/download';
 
 function cors(res) {
@@ -115,6 +116,7 @@ export default async function handler(req, res) {
   cors(res);
   res.setHeader('Cache-Control', 's-maxage=300');
   if (req.method === 'OPTIONS') return res.status(200).end();
+  if (!requireAuth(req, res)) return;
   const key = process.env.FUTPYTHON_API_KEY;
   if (!key) return res.status(200).json({ ok: false, error: 'falta FUTPYTHON_API_KEY' });
   const league = String(req.query.league || '');

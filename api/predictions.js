@@ -1,5 +1,5 @@
 export const maxDuration = 20;
-import { dbq, slimMatches, mkHist, buildRatings, buildProbs, invLambda, normName, mapLeague, fd, fetchOdds, findOdds, isUpcoming, cors, cl } from './core.js';
+import { dbq, slimMatches, mkHist, buildRatings, buildProbs, invLambda, normName, mapLeague, fd, fetchOdds, findOdds, isUpcoming, cors, cl, requireAuth } from './core.js';
 import { espnMatches, sameFixture, espnRefresh, espnRestore, espnHistFeeds, espnInfo, espnAggs, buildAggMap, compactAgg } from './espn.js';
 import { computeElo, eloLambda, buildH2H, h2hOf, leagueWeights, statPreds, bumpStats, bumpAllowed, perfFactor } from './pro.js';
 
@@ -186,6 +186,7 @@ export default async function handler(req, res) {
   cors(res);
   res.setHeader('Cache-Control', 's-maxage=60, stale-while-revalidate=300');
   if (req.method === 'OPTIONS') return res.status(200).end();
+  if (!requireAuth(req, res)) return;
   if (req.method !== 'GET') return res.status(405).json({ ok: false, error: 'method' });
   if (!rateOk(req)) return res.status(429).json({ ok: false, error: 'rate limit: esperá un momento y recargá' });
   const token = process.env.FOOTBALL_DATA_TOKEN;
