@@ -52,14 +52,14 @@ h1{font-family:'Chakra Petch',sans-serif;font-size:1.65rem;font-weight:700;color
 .pt{font-size:.72rem;color:var(--t2);text-align:right;line-height:1.55}
 .pm{display:flex;justify-content:space-between;align-items:center;gap:10px}
 .probs{display:flex;gap:6px;margin:8px 0 10px}
-.pi{flex:1;text-align:center}.pl{font-size:.56rem;color:var(--t2);letter-spacing:.4px;text-transform:uppercase}
+.pi{flex:1;text-align:center}.pl{font-size:.75rem;color:var(--t2);letter-spacing:.4px;text-transform:uppercase}
 .pb{height:5px;background:rgba(255,255,255,.08);border-radius:5px;overflow:hidden;margin:4px 0}
 .pf{height:100%;background:linear-gradient(90deg,var(--p),var(--s));width:0;transition:width .6s}
 .pv{font-family:'Chakra Petch',sans-serif;font-size:.72rem;font-weight:600;color:var(--p)}
 .mk{display:grid;grid-template-columns:repeat(4,1fr);gap:6px;margin:8px 0 10px}
 .mk3{display:grid;grid-template-columns:repeat(3,1fr);gap:6px;margin:8px 0 10px}
 .mi{background:rgba(0,0,0,.22);border:1px solid rgba(255,255,255,.05);border-radius:9px;padding:9px 4px;text-align:center}
-.ml{font-size:.56rem;color:var(--t2);letter-spacing:.3px}.mv{font-family:'Chakra Petch',sans-serif;font-size:.82rem;font-weight:600;color:var(--p);font-variant-numeric:tabular-nums}
+.ml{font-size:.75rem;color:var(--t2);letter-spacing:.3px}.mv{font-family:'Chakra Petch',sans-serif;font-size:.82rem;font-weight:600;color:var(--p);font-variant-numeric:tabular-nums}
 .dg{display:grid;grid-template-columns:repeat(2,1fr);gap:10px;margin:12px 0}
 .dc{background:var(--c);border:1px solid rgba(255,255,255,.07);border-radius:14px;padding:13px 10px;text-align:center}
 .dn{font-family:'Chakra Petch',sans-serif;font-size:1.4rem;font-weight:700;color:var(--p)}.dl{font-size:.62rem;color:var(--t2);line-height:1.45;margin-top:3px}
@@ -86,6 +86,7 @@ details.sec>summary:hover{color:var(--p)}
 .secb .stt{padding-top:9px}
 .stt{font-size:.74rem;color:var(--s);font-weight:600;margin:0 0 5px;letter-spacing:.2px}
 .note{font-size:.66rem;color:var(--t2);text-align:center;margin:10px 0;line-height:1.55}
+.sr{position:absolute;width:1px;height:1px;overflow:hidden;clip:rect(0,0,0,0);white-space:nowrap}
 @media(min-width:768px){.grid{grid-template-columns:repeat(2,1fr)}body{padding:24px 20px 36px}}
 
 #gate{position:fixed;inset:0;z-index:9999;display:flex;align-items:center;justify-content:center;background:rgba(5,8,16,.92);backdrop-filter:blur(6px);padding:20px}
@@ -102,6 +103,7 @@ details.sec>summary:hover{color:var(--p)}
 <h1>⚽ FutPredict Pro</h1>
 <p>Acceso privado</p>
 <form id="gateForm">
+<label for="gatePw" class="sr">Contraseña</label>
 <input type="password" id="gatePw" placeholder="Contraseña" autocomplete="current-password">
 <button class="btn go" type="submit">Entrar</button>
 </form>
@@ -173,7 +175,7 @@ function tauC(h,a,hL,aL){if(h===0&&a===0)return 1-hL*aL*(-0.06);if(h===0&&a===1)
 function probsC(hL,aL){var tot=0,hW=0,d=0,aW=0;for(var h=0;h<=8;h++)for(var a=0;a<=8;a++){var p=poisson(hL,h)*poisson(aL,a)*tauC(h,a,hL,aL);tot+=p;if(h>a)hW+=p;else if(h===a)d+=p;else aW+=p;}return{home:Math.round(hW/tot*100),draw:Math.round(d/tot*100),away:Math.round(aW/tot*100)};}
 function fmtT(i){try{var d=new Date(i);return pad2(d.getHours())+':'+pad2(d.getMinutes());}catch(e){return '';}}
 function dateKey(i){var d=new Date(i);return d.getFullYear()+'-'+pad2(d.getMonth()+1)+'-'+pad2(d.getDate());}
-function formHTML(a){if(!a||!a.length)return '';return '<div class="frm">'+a.map(function(r){return '<span class="fd '+r+'">'+r+'</span>';}).join('')+'</div>';}
+function formHTML(a){if(!a||!a.length)return '';return '<div class="frm">'+a.map(function(r){r=/^[WDL]$/.test(r)?r:'?';return '<span class="fd '+r+'">'+r+'</span>';}).join('')+'</div>';}
 function bs(q,o){return (q[0]-o[0])*(q[0]-o[0])+(q[1]-o[1])*(q[1]-o[1])+(q[2]-o[2])*(q[2]-o[2]);}
 function outc(rs){var r=String(rs).split('-');var h=+r[0],a=+r[1];return h>a?[1,0,0]:(h===a?[0,1,0]:[0,0,1]);}
 function pct(a){return [a[0]/100,a[1]/100,a[2]/100];}
@@ -184,19 +186,30 @@ var ALL=[],curD='w',curL='all',SCLIENT={};
 function effL(m){var h=m.hL,a=m.aL;var adj=DB.adj[m.id];if(adj){h*=adj.h;a*=adj.a;}return{h:h,a:a,adj:!!adj};}
 function dispProbs(m){var e=effL(m);return e.adj?probsC(e.h,e.a):m.probs;}
 
+var LOADING=false;
 function load(){
+  if(LOADING)return; // M8: no solapar cargas (el auto-refresh podía pisar una carga en curso)
+  LOADING=true;
   $('st').className='st';$('st').textContent='⏳ Conectando...';
-  var ctl=new AbortController();var to=setTimeout(function(){ctl.abort();},12000);
-  fetch('api/predictions',{signal:ctl.signal}).then(function(r){clearTimeout(to);if(r.status===401){showGate('Sesión expirada. Ingresá de nuevo.');var e=new Error('no autorizado');e.gate=1;throw e;}return r.json();}).then(function(d){
+  var ctl=new AbortController();var to=setTimeout(function(){ctl.abort();},18000); // M7: 18s (< 20s del backend), antes 12s
+  fetch('api/predictions?light=1',{signal:ctl.signal}).then(function(r){clearTimeout(to);if(r.status===401){showGate('Sesión expirada. Ingresá de nuevo.');var e=new Error('no autorizado');e.gate=1;throw e;}return r.json();}).then(function(d){
+    LOADING=false;
     if(!d.ok)throw new Error(d.error||'backend devolvió error');
     ALL=d.predictions||[];
-    $('st').className='st ok';$('st').textContent='✅ '+ALL.length+' partidos reales ('+(d.window?d.window.from+'→'+d.window.to:'')+')'+(d.oddsEnabled?' · 💰 cuotas':'');
+    // M13: mostrar ligas sin historial inicializado y errores de fuentes.
+    var hb=[];if(d.hist)Object.keys(d.hist).forEach(function(k){if(!d.hist[k].ok)hb.push(k);});
+    var msg='✅ '+ALL.length+' partidos reales ('+(d.window?d.window.from+'→'+d.window.to:'')+')'+(d.oddsEnabled?' · 💰 cuotas':'');
+    if(hb.length)msg+=' · ⚠️ sin historial: '+hb.slice(0,3).join(', ')+(hb.length>3?' (+'+(hb.length-3)+')':'');
+    if(d.errors&&d.errors.length)msg+=' · ⚠️ '+d.errors.length+' aviso(s) de fuentes';
+    $('st').className='st ok';$('st').textContent=msg;
     sync();chips();render();dash();btFill();enrichStats();if(!PULLED){PULLED=1;pull();}
   }).catch(function(e){
-    clearTimeout(to);
+    clearTimeout(to);LOADING=false;
     if(e&&e.gate)return;
-    $('st').className='st err';
-    $('st').innerHTML='🐞 '+e.message+' <button class="btn go" onclick="load()">Reintentar</button>';
+    // B3: el mensaje de error va por textContent (no innerHTML) para no inyectar HTML.
+    var st=$('st');st.className='st err';st.textContent='🐞 '+(e&&e.message?e.message:'error')+' ';
+    var rb=document.createElement('button');rb.className='btn go';rb.textContent='Reintentar';
+    rb.addEventListener('click',load);st.appendChild(rb);
     $('grid').innerHTML='';
   });
 }
@@ -236,7 +249,11 @@ function srv(action,body){return fetch('api/log?action='+action,{method:body?'PO
 function push(){var ids=Object.keys(DIRTY);if(!ids.length)return;var arr=ids.map(function(k){return DB.preds[k];}).filter(Boolean);if(!arr.length)return;
   srv('save',{preds:arr}).then(function(d){if(d&&d.ok){ids.forEach(function(k){delete DIRTY[k];});}}).catch(function(){});}
 function pull(){srv('list').then(function(d){if(!d||!d.ok)return;var ch=false,onSrv={};
-  d.preds.forEach(function(p){onSrv[p.id]=1;var l=DB.preds[p.id];if(!l){DB.preds[p.id]=p;ch=true;}else if(l.estado==='pend'&&p.estado!=='pend'){DB.preds[p.id]=p;ch=true;}});
+  d.preds.forEach(function(p){onSrv[p.id]=1;var l=DB.preds[p.id];if(!l){DB.preds[p.id]=p;ch=true;}else if(l.estado==='pend'&&p.estado!=='pend'){DB.preds[p.id]=p;ch=true;}
+    // A5: conservar sn/oddsClose locales si el servidor no los trae (registros guardados antes del fix).
+    var cur=DB.preds[p.id];
+    if(cur.sn==null&&l&&l.sn!=null){cur.sn=l.sn;ch=true;}
+    if(cur.oddsClose==null&&l&&l.oddsClose!=null){cur.oddsClose=l.oddsClose;ch=true;}});
   Object.keys(DB.preds).forEach(function(k){if(!onSrv[k])DIRTY[k]=1;});
   if(ch){save();dash();render();}push();
   $('st').textContent=$('st').textContent+' · ☁️ respaldo ('+d.count+')';}).catch(function(){});}
@@ -255,9 +272,14 @@ function sync(){var ch=false;var SK={home:'h',draw:'d',away:'a'};
   });if(ch){save();push();}}
 function toggleConf(){CONF=!CONF;localStorage.setItem('fpconf',CONF?'1':'0');$('confBtn').classList.toggle('on',CONF);render();}
 function chips(){var s={};ALL.forEach(function(m){s[m.league]=1;});var n=Object.keys(s).slice(0,40);
-  var h='<div class="chip '+(curL==='all'?'on':'')+'" onclick="setL(\'all\')">🌍 Todas</div>';
-  n.forEach(function(x){h+='<div class="chip '+(curL===x?'on':'')+'" onclick="setL(\''+x.replace(/'/g,"\\'")+ '\')">'+x+'</div>';});
-  $('chips').innerHTML=h;}
+  // B3: sin onclick inline con quoting manual (una `\` rompía el escape e inyectaba JS).
+  // Se usa data-l + addEventListener, y el texto va con esc().
+  var h='<div class="chip '+(curL==='all'?'on':'')+'" data-l="all">🌍 Todas</div>';
+  n.forEach(function(x){h+='<div class="chip '+(curL===x?'on':'')+'" data-l="'+esc(x)+'">'+esc(x)+'</div>';});
+  $('chips').innerHTML=h;
+  var cs=$('chips').querySelectorAll('.chip');
+  for(var i=0;i<cs.length;i++){cs[i].addEventListener('click',function(){setL(this.getAttribute('data-l'));});}
+}
 function setL(v){curL=v;chips();render();}
 function setD(v,el){curD=v;var b=document.querySelectorAll('.row .btn');for(var i=0;i<b.length;i++)b[i].classList.remove('on');el.classList.add('on');render();}
 function tkey(){if(curD==='w')return null;var d=new Date();d.setDate(d.getDate()+curD);return d.getFullYear()+'-'+pad2(d.getMonth()+1)+'-'+pad2(d.getDate());}
@@ -342,7 +364,16 @@ function render(){var tk=tkey();var list=ALL.filter(function(m){if(curL!=='all'&
 }
 function setAdj(id,mode){var a={h:1,a:1};if(mode==='h')a.h=0.9;if(mode==='a')a.a=0.9;if(mode==='b'){a.h=0.9;a.a=0.9;}
   if(mode==='none')delete DB.adj[id];else DB.adj[id]=a;save();render();openM(id);}
-function openM(id){var m=null;for(var i=0;i<ALL.length;i++){if(String(ALL[i].id)===String(id)){m=ALL[i];break;}}if(!m)return;var e=effL(m);var mk=markets(e.h,e.a);var pr=dispProbs(m);
+function openM(id){var m=null;for(var i=0;i<ALL.length;i++){if(String(ALL[i].id)===String(id)){m=ALL[i];break;}}if(!m)return;
+  // M15: la lista viene ligera (?light=1); el detalle pesado (sp/h2h/aggs) se pide al abrir el modal.
+  // Se fusiona en el objeto para que la próxima apertura sea instantánea.
+  if(m._full||m.sp!==undefined){renderModal(m);return;}
+  fetch('api/predictions?detail='+encodeURIComponent(id)).then(function(r){return r.json();}).then(function(d){
+    if(d&&d.ok&&d.prediction){var p=d.prediction;m.sp=p.sp;m.h2h=p.h2h;m.aggH=p.aggH;m.aggA=p.aggA;if(p.top)m.top=p.top;m._full=true;}
+    renderModal(m);
+  }).catch(function(){renderModal(m);});
+}
+function renderModal(m){var e=effL(m);var mk=markets(e.h,e.a);var pr=dispProbs(m);
   var mt=pickOf(pr);
   var mp=Math.max(pr.home,pr.draw,pr.away);
   var aggHtml=aggRows(m.home,m.aggH)+aggRows(m.away,m.aggA);
@@ -389,6 +420,8 @@ function openM(id){var m=null;for(var i=0;i<ALL.length;i++){if(String(ALL[i].id)
 }
 function closeM(){$('modal').classList.remove('on');}
 $('modal').addEventListener('click',function(e){if(e.target.id==='modal')closeM();});
+// B8: ESC también cierra el modal.
+document.addEventListener('keydown',function(e){if(e.key==='Escape')closeM();});
 function f3(x){return x==null?'--':x.toFixed(3);}
 function dash(){var p=Object.values(DB.preds);var d=p.filter(function(x){return x.estado!=='pend';});var w=d.filter(function(x){return x.estado==='win';}).length;
   $('dAcc').textContent=d.length?Math.round(w/d.length*100)+'%':'--';$('dN').textContent=p.length;$('dW').textContent=w;
@@ -429,23 +462,23 @@ fetch('api/backtest?cid='+encodeURIComponent(c)).then(function(r){return r.json(
  '<div class="rw"><span class="rl">Brier modelo</span><span class="rv">'+d.brier+'</span></div>'+ 
  '<div class="rw"><span class="rl">Brier azar</span><span class="rv">'+d.brierBaseline+'</span></div>'+ 
  '<div class="rw"><span class="rl">Log-loss</span><span class="rv">'+d.logloss+'</span></div>'+rows+
- '<div class="note">Si Brier modelo &lt; Brier azar, el modelo aporta información real en esa liga.</div>';
+ '<div class="note">Si Brier modelo &lt; Brier azar, el modelo aporta información real en esa liga.</div>'+
+ (d.nota?'<div class="note">'+esc(d.nota)+'</div>':'');
 }).catch(function(e){$('btOut').innerHTML='<div class="note">⚠️ '+esc(String(e))+'</div>';});}
 function oddsMove(o,c){if(!o||!c)return 0;var m=0;['h','d','a'].forEach(function(k){if(o[k]&&c[k])m=Math.max(m,Math.abs(c[k]/o[k]-1));});return m;}
 function hist(){var p=Object.values(DB.preds);if(!p.length){$('hlist').innerHTML='<div class="note">📭 Sin registros.</div>';return;}
   var PK={home:'1 Local',draw:'X Empate',away:'2 Visita'};
   function rl(rs){var o=outc(rs);return o[0]?'1':(o[1]?'X':'2');}
-  $('hlist').innerHTML=p.reverse().slice(0,60).map(function(x){return '<div class="hist"><div><b>'+esc(x.home)+' vs '+esc(x.away)+'</b><div style="font-size:.62rem;color:var(--t2)">'+esc(x.league)+' · Pick: '+(PK[x.pred]||'?')+(x.rs?' · Real '+esc(x.rs)+' ('+rl(x.rs)+')':'')+' · marcador prob. '+esc(x.score)+(x.clv!=null?' · CLV '+x.clv+'%':'')+'</div></div><span class="rb '+x.estado+'">'+(x.estado==='win'?'✅':(x.estado==='loss'?'❌':''))+'</span></div>';}).join('');}
+  $('hlist').innerHTML=p.reverse().slice(0,60).map(function(x){return '<div class="hist"><div><b>'+esc(x.home)+' vs '+esc(x.away)+'</b><div style="font-size:.62rem;color:var(--t2)">'+esc(x.league)+' · Pick: '+(PK[x.pred]||'?')+(x.rs?' · Real '+esc(x.rs)+' ('+rl(x.rs)+')':'')+' · marcador prob. '+esc(x.score)+(x.clv!=null?' · CLV '+x.clv+'%':'')+'</div></div><span class="rb '+x.estado+'">'+(x.estado==='win'?'✅':(x.estado==='loss'?'❌':'⏳'))+'</span></div>';}).join('');}
 function tab(k,el){var b=document.querySelectorAll('.tb');for(var i=0;i<b.length;i++)b[i].classList.remove('on');el.classList.add('on');
   var p=document.querySelectorAll('.pane');for(var j=0;j<p.length;j++)p[j].classList.remove('on');$('pane-'+k).classList.add('on');if(k==='d')dash();if(k==='h')hist();}
 if(CONF)$('confBtn').classList.add('on');
 function showGate(msg){var g=$('gate');if(g)g.style.display='flex';var m=$('gateMsg');if(m)m.textContent=msg||'';}
 function hideGate(){var g=$('gate');if(g)g.style.display='none';}
-function startApp(){load();setTimeout(load,20000);setTimeout(load,60000);setInterval(load,300000);}
+function startApp(){load();setTimeout(load,20000);setTimeout(load,60000);setInterval(function(){if(!document.hidden)load();},300000);} // M8: no refrescar con la pestaña oculta
 function boot(){
   fetch('api/auth').then(function(r){return r.json();}).then(function(d){
     if(d&&d.authed){hideGate();startApp();}
-    else if(d&&!d.protected){showGate('⚠️ Falta configurar SITE_PASSWORD en Vercel (Settings → Environment Variables).');}
     else{showGate('');var i=$('gatePw');if(i)i.focus();}
   }).catch(function(){showGate('No se pudo contactar el servidor.');});
 }
