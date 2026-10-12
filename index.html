@@ -152,6 +152,7 @@ details.sec>summary:hover{color:var(--p)}
   <div class="note" id="dNote"></div>
   <div class="sec"><div class="stt">🎯 Calibración (¿acierta tanto como dice?)</div><div id="calib"></div></div>
   <div class="sec"><div class="stt">🔍 Dónde se desvía mi modelo</div><div class="row"><button class="btn go" onclick="calibDeep()">Analizar mis resultados</button></div><div id="calibDeep"></div></div>
+  <div class="sec"><div class="stt">📊 Calibración de stats (over/under)</div><div class="row"><button class="btn go" onclick="statCal()">Calibrar mis stats</button></div><div id="statCal"></div></div>
   <div class="sec"><div class="stt">🧪 Medir modelo (backtest por liga)</div><div class="row"><select id="btSel" class="btn" style="max-width:55%"></select><button class="btn go" onclick="btRun()">Medir</button></div><div id="btOut"></div></div>
   <div class="row"><button class="btn go" onclick="exportCSV()">⬇️ Exportar historial CSV</button></div>
 </div>
@@ -508,6 +509,20 @@ fetch('api/calibration').then(function(r){return r.json();}).then(function(d){
  h+='<div class="note">n='+d.n+' partidos terminados. Con n chico los desvíos son ruido.</div>';
  $('calibDeep').innerHTML=h;
 }).catch(function(e){$('calibDeep').innerHTML='<div class="note">⚠️ '+esc(String(e))+'</div>';});}
+function statCal(){$('statCal').innerHTML='<div class="note">⏳ Comparando picks de stats vs valores reales…</div>';
+fetch('api/statcal').then(function(r){return r.json();}).then(function(d){
+ if(!d.ok){$('statCal').innerHTML='<div class="note">⚠️ '+esc(d.error||'sin datos')+'</div>';return;}
+ var h='';
+ (d.findings||[]).forEach(function(c){h+='<div class="note">🔎 '+esc(c)+'</div>';});
+ if(d.overall){h+='<div class="stt" style="margin-top:.4rem">Global ('+d.n+' picks, '+d.matches+' partidos)</div>';
+ h+='<div class="rw"><span class="rl">Todos los picks</span><span class="rv">dice '+d.overall.dice+'% · acertó '+d.overall.acierta+'% · Brier '+d.overall.brier+'</span></div>';}
+ if(d.byStat&&d.byStat.length){h+='<div class="stt" style="margin-top:.4rem">Por estadística</div>';
+ d.byStat.forEach(function(s){h+='<div class="rw"><span class="rl">'+esc(s.name)+' (n='+s.n+')</span><span class="rv">dice '+s.dice+'% · acertó '+s.acierta+'% · Brier '+s.brier+'</span></div>';});}
+ if(d.byBucket&&d.byBucket.length){h+='<div class="stt" style="margin-top:.4rem">Por confianza del pick</div>';
+ d.byBucket.forEach(function(b){h+='<div class="rw"><span class="rl">'+esc(b.range)+' (n='+b.n+')</span><span class="rv">dice '+b.dice+'% · acertó '+b.acierta+'%</span></div>';});}
+ h+='<div class="note">Los picks se guardan al abrir el modal pre-partido; los reales llegan del boxscore. Con n chico los desvíos son ruido.</div>';
+ $('statCal').innerHTML=h;
+}).catch(function(e){$('statCal').innerHTML='<div class="note">⚠️ '+esc(String(e))+'</div>';});}
 function oddsMove(o,c){if(!o||!c)return 0;var m=0;['h','d','a'].forEach(function(k){if(o[k]&&c[k])m=Math.max(m,Math.abs(c[k]/o[k]-1));});return m;}
 function hist(){var p=Object.values(DB.preds);if(!p.length){$('hlist').innerHTML='<div class="note">📭 Sin registros.</div>';return;}
   var PK={home:'1 Local',draw:'X Empate',away:'2 Visita'};
