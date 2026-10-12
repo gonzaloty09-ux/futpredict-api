@@ -510,7 +510,7 @@ fetch('api/calibration').then(function(r){return r.json();}).then(function(d){
  $('calibDeep').innerHTML=h;
 }).catch(function(e){$('calibDeep').innerHTML='<div class="note">⚠️ '+esc(String(e))+'</div>';});}
 function statCal(){$('statCal').innerHTML='<div class="note">⏳ Comparando picks de stats vs valores reales…</div>';
-fetch('api/statcal').then(function(r){return r.json();}).then(function(d){
+fetch('api/calibration?stats=1').then(function(r){return r.json();}).then(function(d){
  if(!d.ok){$('statCal').innerHTML='<div class="note">⚠️ '+esc(d.error||'sin datos')+'</div>';return;}
  var h='';
  (d.findings||[]).forEach(function(c){h+='<div class="note">🔎 '+esc(c)+'</div>';});
