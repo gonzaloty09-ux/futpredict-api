@@ -87,8 +87,26 @@ details.sec>summary:hover{color:var(--p)}
 .stt{font-size:.74rem;color:var(--s);font-weight:600;margin:0 0 5px;letter-spacing:.2px}
 .note{font-size:.66rem;color:var(--t2);text-align:center;margin:10px 0;line-height:1.55}
 @media(min-width:768px){.grid{grid-template-columns:repeat(2,1fr)}body{padding:24px 20px 36px}}
+
+#gate{position:fixed;inset:0;z-index:9999;display:flex;align-items:center;justify-content:center;background:rgba(5,8,16,.92);backdrop-filter:blur(6px);padding:20px}
+.gate-card{width:100%;max-width:360px;background:linear-gradient(135deg,#0a0e1a,#141a33);border:1px solid var(--line);border-radius:16px;padding:28px 24px;text-align:center;box-shadow:0 20px 60px rgba(0,0,0,.5)}
+.gate-card h1{margin-bottom:4px}
+.gate-card p{color:var(--t2);margin-bottom:18px}
+.gate-card input{width:100%;padding:12px 14px;border-radius:10px;border:1px solid var(--line);background:rgba(255,255,255,.06);color:var(--t);font-size:16px;margin-bottom:12px;outline:none}
+.gate-card input:focus{border-color:var(--p)}
+.gate-card .btn{width:100%}
+#gateMsg{margin-top:12px;min-height:20px;color:var(--w);font-size:14px}
 </style>
 </head>
+<div id="gate" style="display:none"><div class="gate-card">
+<h1>⚽ FutPredict Pro</h1>
+<p>Acceso privado</p>
+<form id="gateForm">
+<input type="password" id="gatePw" placeholder="Contraseña" autocomplete="current-password">
+<button class="btn go" type="submit">Entrar</button>
+</form>
+<div id="gateMsg"></div>
+</div></div>
 <body>
 <h1>⚽ FutPredict Pro</h1>
 <div class="sub">v26 · diseño despejado (secciones plegables) · medición seria + respaldo en la nube + histórico</div>
@@ -97,7 +115,7 @@ details.sec>summary:hover{color:var(--p)}
 <div class="tabs">
   <button class="tb on" onclick="tab('m',this)">⚽ Partidos</button>
   <button class="tb" onclick="tab('d',this)">📊 Dashboard</button>
-  <button class="tb" onclick="tab('h',this)">📜 Historial</button>
+  <button class="tb" onclick="tab('h',this)">📜 Historial</button><button class="tb" onclick="logout()" style="margin-left:auto">🔒 Salir</button>
 </div>
 
 <div class="pane on" id="pane-m">
@@ -169,13 +187,14 @@ function dispProbs(m){var e=effL(m);return e.adj?probsC(e.h,e.a):m.probs;}
 function load(){
   $('st').className='st';$('st').textContent='⏳ Conectando...';
   var ctl=new AbortController();var to=setTimeout(function(){ctl.abort();},12000);
-  fetch('api/predictions',{signal:ctl.signal}).then(function(r){clearTimeout(to);return r.json();}).then(function(d){
+  fetch('api/predictions',{signal:ctl.signal}).then(function(r){clearTimeout(to);if(r.status===401){showGate('Sesión expirada. Ingresá de nuevo.');var e=new Error('no autorizado');e.gate=1;throw e;}return r.json();}).then(function(d){
     if(!d.ok)throw new Error(d.error||'backend devolvió error');
     ALL=d.predictions||[];
     $('st').className='st ok';$('st').textContent='✅ '+ALL.length+' partidos reales ('+(d.window?d.window.from+'→'+d.window.to:'')+')'+(d.oddsEnabled?' · 💰 cuotas':'');
     sync();chips();render();dash();btFill();enrichStats();if(!PULLED){PULLED=1;pull();}
   }).catch(function(e){
     clearTimeout(to);
+    if(e&&e.gate)return;
     $('st').className='st err';
     $('st').innerHTML='🐞 '+e.message+' <button class="btn go" onclick="load()">Reintentar</button>';
     $('grid').innerHTML='';
@@ -420,10 +439,31 @@ function hist(){var p=Object.values(DB.preds);if(!p.length){$('hlist').innerHTML
 function tab(k,el){var b=document.querySelectorAll('.tb');for(var i=0;i<b.length;i++)b[i].classList.remove('on');el.classList.add('on');
   var p=document.querySelectorAll('.pane');for(var j=0;j<p.length;j++)p[j].classList.remove('on');$('pane-'+k).classList.add('on');if(k==='d')dash();if(k==='h')hist();}
 if(CONF)$('confBtn').classList.add('on');
-load();
-setTimeout(load,20000);
-setTimeout(load,60000);
-setInterval(load,300000);
+function showGate(msg){var g=$('gate');if(g)g.style.display='flex';var m=$('gateMsg');if(m)m.textContent=msg||'';}
+function hideGate(){var g=$('gate');if(g)g.style.display='none';}
+function startApp(){load();setTimeout(load,20000);setTimeout(load,60000);setInterval(load,300000);}
+function boot(){
+  fetch('api/auth').then(function(r){return r.json();}).then(function(d){
+    if(d&&d.authed){hideGate();startApp();}
+    else if(d&&!d.protected){showGate('⚠️ Falta configurar SITE_PASSWORD en Vercel (Settings → Environment Variables).');}
+    else{showGate('');var i=$('gatePw');if(i)i.focus();}
+  }).catch(function(){showGate('No se pudo contactar el servidor.');});
+}
+function logout(){fetch('api/auth',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({logout:true})}).then(function(){location.reload();}).catch(function(){location.reload();});}
+document.addEventListener('DOMContentLoaded',function(){
+  var f=$('gateForm');
+  if(f)f.addEventListener('submit',function(e){
+    e.preventDefault();
+    var pw=$('gatePw').value;
+    $('gateMsg').textContent='Verificando...';
+    fetch('api/auth',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({password:pw})}).then(function(r){return r.json().then(function(d){return {s:r.status,d:d};});}).then(function(x){
+      if(x.s===200&&x.d.ok){$('gatePw').value='';hideGate();startApp();}
+      else{$('gateMsg').textContent='❌ '+((x.d&&x.d.error)||'contraseña incorrecta');}
+    }).catch(function(){$('gateMsg').textContent='❌ Error de conexión';});
+  });
+  boot();
+});
+
 </script>
 </body>
 </html>
