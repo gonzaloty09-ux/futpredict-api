@@ -1,0 +1,20 @@
+name: FutPredict auto-log
+
+# Registra pronósticos 1X2, picks de stats pre-partido y resultados sin que
+# David tenga que abrir la app. Corre cada 2 horas; la ventana de partidos
+# de la app cubre -3/+6 días, así que cada partido queda registrado días
+# antes del pitazo. También se puede lanzar a mano desde la pestaña Actions.
+on:
+  schedule:
+    - cron: '0 */2 * * *'
+  workflow_dispatch:
+
+jobs:
+  autolog:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Registrar pronósticos
+        run: |
+          OUT=$(curl -sS -m 180 -H "x-auto-key: ${{ secrets.AUTO_LOG_KEY }}" "https://gonzaloty09-ux-futpredict-api.vercel.app/api/predictions?auto=1")
+          echo "$OUT"
+          echo "$OUT" | grep -q '"auto":true' || (echo "auto-log no devolvió confirmación" && exit 1)
