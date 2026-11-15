@@ -201,6 +201,16 @@ export function mkHist(ms, ts, now) {
   const rr = buildRatings(ms, now);
   return { R: rr.R, lH: rr.lH, lA: rr.lA, form: buildForm(ms), _matches: ms, ts: ts, ok: true, count: ms.length };
 }
+// Paso 2 (2026-11-15): umbral de "sin ratings". Un equipo con menos de 3 partidos
+// en el pool de ratings tiene att/def casi 100% prior (1.0 = equipo promedio):
+// el modelo no sabe nada de él y sus probabilidades salen planas (33/33/33).
+// nc = conteo real de partidos del equipo en el pool (no el peso decaído n, que
+// también se achica cuando los partidos son viejos). Los equipos habituales
+// tienen nc en decenas; nc<3 es un debutante, un equipo de división baja en
+// copa o un ascendido sin historial en la fuente. Umbral en una sola constante.
+export const MIN_RATINGS_NC = 3;
+export function minNcOf(h, a) { return Math.min((h && h.nc) || 0, (a && a.nc) || 0); }
+export function noRatings(h, a) { return minNcOf(h, a) < MIN_RATINGS_NC; }
 export function buildProbs(hL, aL, sampleN, rho, prior) {
   const R = rho != null ? rho : RHO;
   const maxG = 8; let tot = 0, hW = 0, d = 0, aW = 0; const sc = [];

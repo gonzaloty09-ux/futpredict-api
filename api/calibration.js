@@ -39,11 +39,17 @@ export default async function handler(req, res) {
   // (Fusionado aquí porque el plan Hobby limita a 12 serverless functions.)
   if (req.query && req.query.stats === '1') return statCalibration(res);
   try {
-    var rows = await q("select league, pred, pr, pm, pk, estado, rs, clv, sn from preds where estado in ('win','loss') limit 5000");
+    var rows = await q("select league, pred, pr, pm, pk, estado, rs, clv, sn, norating from preds where estado in ('win','loss') limit 5000");
     var BK = [['<50%', 0, 0.5], ['50-60%', 0.5, 0.6], ['60-70%', 0.6, 0.7], ['70-80%', 0.7, 0.8], ['80%+', 0.8, 1.01]];
     var buckets = BK.map(function (b) { return { range: b[0], lo: b[1], hi: b[2], n: 0, exp: 0, hit: 0 }; });
     var byPick = { home: { n: 0, exp: 0, hit: 0 }, draw: { n: 0, exp: 0, hit: 0 }, away: { n: 0, exp: 0, hit: 0 } };
     var leagues = {};
+    // Paso 2 (2026-11-15): partidos sin ratings (algún equipo con <3 partidos
+    // en el pool). Se excluyen de la calibración del modelo y se reportan
+    // aparte: su pick guardado es del mercado (pr = mercado) o no existe
+    // (sin mercado → pred null, ya filtrado arriba). El Brier del mercado
+    // sí los cuenta, porque ahí la opinión es del mercado, no del modelo.
+    var nr = { n: 0, exp: 0, hit: 0 };
     var src = {
       blend: { n: 0, exp: 0, hit: 0, brier: 0 },
       model: { n: 0, exp: 0, hit: 0, brier: 0 },
@@ -57,6 +63,19 @@ export default async function handler(req, res) {
       var conf = pr[pi];
       var hit = r.estado === 'win' ? 1 : 0;
       var actual = actualOutcome(r.rs);
+      var isNr = r.norating === true || r.norating === 1 || r.norating === 't';
+      if (isNr) {
+        nr.n++; nr.exp += conf; nr.hit += hit;
+        var tm = tri(r.pk);
+        if (tm && actual) {
+          var mi2 = tm[0] >= tm[1] && tm[0] >= tm[2] ? 0 : tm[1] >= tm[2] ? 1 : 2;
+          var sM = src.market;
+          sM.n++; sM.exp += tm[mi2]; sM.hit += (NAMES[mi2] === actual ? 1 : 0);
+          var oM = [actual === 'home' ? 1 : 0, actual === 'draw' ? 1 : 0, actual === 'away' ? 1 : 0];
+          sM.brier += (tm[0] - oM[0]) * (tm[0] - oM[0]) + (tm[1] - oM[1]) * (tm[1] - oM[1]) + (tm[2] - oM[2]) * (tm[2] - oM[2]);
+        }
+        return;
+      }
       n++;
       for (var i = 0; i < buckets.length; i++) {
         var b = buckets[i];
@@ -94,6 +113,7 @@ export default async function handler(req, res) {
     }
     buckets.forEach(fin);
     Object.keys(byPick).forEach(function (k) { fin(byPick[k]); });
+    fin(nr);
     var lgList = Object.keys(leagues).map(function (k) { var o = fin(leagues[k]); o.league = k; return o; })
       .filter(function (o) { return o.n >= 10; })
       .sort(function (a, b) { return Math.abs(b.diff) - Math.abs(a.diff); });
@@ -131,6 +151,7 @@ export default async function handler(req, res) {
       }
       if (clvAvg != null) findings.push('CLV promedio: ' + (clvAvg >= 0 ? '+' : '') + clvAvg + '%. ' +
         (clvAvg > 0 ? 'Entras en promedio mejor que el cierre: señal de edge real.' : 'Entras peor que el cierre en promedio: revisa el timing de tus entradas.'));
+      if (nr.n >= 5) findings.push('Sin ratings (n=' + nr.n + '): partidos donde el modelo no opinó (equipos sin historial). No entran en la calibración de arriba y se reportan aparte: dicen ' + pp(nr.exp) + ' (prob. de mercado) y aciertan ' + pp(nr.hit) + ' (' + dp(nr.diff) + ').');
       if (!findings.length) findings.push('Tu modelo está bien calibrado en todos los cortes con muestra suficiente (n=' + n + '). Nada que corregir por ahora.');
     }
 
@@ -144,6 +165,7 @@ export default async function handler(req, res) {
         modelo: { n: src.model.n, dice: pct1(src.model.exp), acierta: pct1(src.model.hit), brier: src.model.brier },
         mercado: { n: src.market.n, dice: pct1(src.market.exp), acierta: pct1(src.market.hit), brier: src.market.brier }
       },
+      sinRatings: { n: nr.n, dice: nr.n ? pct1(nr.exp) : null, acierta: nr.n ? pct1(nr.hit) : null, desvio: nr.n ? +nr.diff.toFixed(3) : null },
       clvPromedio: clvAvg,
       conclusiones: findings
     });

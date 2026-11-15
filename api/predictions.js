@@ -1,5 +1,5 @@
 export const maxDuration = 20;
-import { dbq, slimMatches, mkHist, buildRatings, buildProbs, invLambda, normName, mapLeague, fd, fetchOdds, findOdds, isUpcoming, cors, noCache, cl, requireAuth, rateLimitKV, clientIp } from './core.js';
+import { dbq, slimMatches, mkHist, buildRatings, buildProbs, invLambda, normName, mapLeague, fd, fetchOdds, findOdds, isUpcoming, cors, noCache, cl, requireAuth, rateLimitKV, clientIp, noRatings, minNcOf } from './core.js';
 import { espnMatches, sameFixture, espnRefresh, espnRestore, espnHistFeeds, espnInfo, espnAggs, buildAggMap, compactAgg } from './espn.js';
 import { computeElo, eloLambda, buildH2H, h2hOf, leagueWeights, statPreds, bumpStats, bumpAllowed, perfFactor, SPK } from './pro.js';
 
@@ -20,6 +20,14 @@ const HIST_MAX = 200;
 // Calibración de stats: actuals por partido pendientes de guardar (se vacían en statsSeed).
 let PEND_ACT = [];
 let SP_COLS_OK = false;
+let NR_COL_OK = false;
+async function ensureNrCol() {
+  if (NR_COL_OK) return;
+  try {
+    await dbq('alter table preds add column if not exists norating boolean default false', [], 8000);
+    NR_COL_OK = true;
+  } catch (e) { /* best-effort */ }
+}
 async function ensureSpCols() {
   if (SP_COLS_OK) return;
   try {
@@ -408,6 +416,12 @@ export default async function handler(req, res) {
       const DEF = { attH: 1, defH: 1, attA: 1, defA: 1, n: 0, nc: 0 };
       const home = src ? (rGet(src.R, srcIx, hn) || DEF) : DEF;
       const away = src ? (rGet(src.R, srcIx, an) || DEF) : DEF;
+      // Paso 2 (2026-11-15): sin ratings el modelo no opina. Si algún equipo
+      // tiene <3 partidos en el pool, sus att/def son ~100% prior (1.0) y las
+      // probabilidades salen planas (33/33/33): el pick caía de visita por
+      // redondeo y el favorito ganaba 82-88% mientras el modelo decía 34%.
+      const minNc = minNcOf(home, away);
+      const noRatingsMatch = noRatings(home, away);
       const lH = src ? src.lH : 1.35, lA = src ? src.lA : 1.15;
       const rH = restDays(hn, tMs), rA = restDays(an, tMs);
       const hL0 = cl(lH * home.attH * away.defA * restFactor(rH), 0.25, 3.6);
@@ -435,8 +449,9 @@ export default async function handler(req, res) {
         id: m.id, cid: cid, home: hn, away: an,
         league: m.competition.name, time: m.utcDate, status: m.status,
         score: m.score && m.score.fullTime ? { home: m.score.fullTime.home, away: m.score.fullTime.away } : null,
-        probs: bp.probs, modelProbs: bp.probs, main: '', hL: +hL.toFixed(2), aL: +aL.toFixed(2), sampleN: Math.round(sampleN),
-        top: bp.top.map(function (x) { return { s: x.h + '-' + x.a, p: Math.round(x.p * 100) }; }),
+        probs: noRatingsMatch ? null : bp.probs, modelProbs: noRatingsMatch ? null : bp.probs, main: '', hL: +hL.toFixed(2), aL: +aL.toFixed(2), sampleN: Math.round(sampleN),
+        top: noRatingsMatch ? null : bp.top.map(function (x) { return { s: x.h + '-' + x.a, p: Math.round(x.p * 100) }; }),
+        noRatings: noRatingsMatch, minNc: minNc, probSrc: noRatingsMatch ? 'nd' : 'modelo',
         restHome: rH, restAway: rA,
         formHome: (formOf(hn).length ? formOf(hn) : (m.formHome || [])), formAway: (formOf(an).length ? formOf(an) : (m.formAway || [])),
         aggH: AG[hn] || null, aggA: AG[an] || null,
@@ -486,19 +501,31 @@ export default async function handler(req, res) {
         const s = mapLeague(p.league); if (!s || !ODDS[s]) return;
         const o = findOdds(ODDS[s].list, normName(p.home), normName(p.away));
         if (!o) return;
-        if (o.ov && o.un) {
+        // Paso 2: sin ratings el ajuste por totales y el modelo puro no significan
+        // nada (las lambdas parten de un rival promedio inventado); solo el
+        // mercado opina.
+        if (!p.noRatings && o.ov && o.un) {
           const pOver = (1 / o.ov) / ((1 / o.ov) + (1 / o.un));
           const lt = invLambda(pOver);
           const f = lt / (p.hL + p.aL);
           if (f > 0.6 && f < 1.6) { p.hL = +(p.hL * f).toFixed(2); p.aL = +(p.aL * f).toFixed(2); }
         }
-        const bp2 = buildProbs(p.hL, p.aL, p.sampleN, p.rho, p.cup ? 1 : 2);
-        p.modelProbs = bp2.probs;
-        p.top = bp2.top.map(function (x) { return { s: x.h + '-' + x.a, p: Math.round(x.p * 100) }; });
         const ih = 1 / o.h, id = 1 / o.d, ia = 1 / o.a; const t = ih + id + ia;
         const mh = ih / t * 100, md = id / t * 100, ma = ia / t * 100;
         p.odds = { h: +o.h.toFixed(2), d: +o.d.toFixed(2), a: +o.a.toFixed(2) };
         p.marketProbs = { home: Math.round(mh), draw: Math.round(md), away: Math.round(ma) };
+        if (p.noRatings) {
+          // El mercado es la única opinión: se muestra tal cual, sin mezclar
+          // con el modelo plano (33/33/33). Sin value: no hay modelo que
+          // comparar contra el mercado.
+          p.probs = { home: p.marketProbs.home, draw: p.marketProbs.draw, away: p.marketProbs.away };
+          p.probSrc = 'mercado';
+          p.value = [];
+          return;
+        }
+        const bp2 = buildProbs(p.hL, p.aL, p.sampleN, p.rho, p.cup ? 1 : 2);
+        p.modelProbs = bp2.probs;
+        p.top = bp2.top.map(function (x) { return { s: x.h + '-' + x.a, p: Math.round(x.p * 100) }; });
         const W = (LGW && LGW[p.league] != null) ? LGW[p.league] : MARKET_W;
         p.probs = {
           home: Math.round(bp2.probs.home * (1 - W) + mh * W),
@@ -506,6 +533,7 @@ export default async function handler(req, res) {
           away: Math.round(bp2.probs.away * (1 - W) + ma * W)
         };
         if (p.probs.home + p.probs.draw + p.probs.away !== 100) p.probs.away = 100 - p.probs.home - p.probs.draw;
+        p.probSrc = 'mezcla';
         const v = [];
         if (p.sampleN >= 4) {
           const sides = [['1', bp2.probs.home, mh, o.h], ['X', bp2.probs.draw, md, o.d], ['2', bp2.probs.away, ma, o.a]];
@@ -523,6 +551,8 @@ export default async function handler(req, res) {
     }
 
     out.forEach(function (p) {
+      // Paso 2: sin probs no hay pick (sin ratings y sin mercado → n/d).
+      if (!p.probs) { p.main = null; return; }
       p.main = p.probs.home >= p.probs.draw && p.probs.home >= p.probs.away ? 'home'
         : p.probs.away >= p.probs.home && p.probs.away >= p.probs.draw ? 'away' : 'draw';
     });
@@ -547,11 +577,12 @@ export default async function handler(req, res) {
       const summary = { saved1x2: 0, savedSp: 0, resultsUpdated: 0, skipped: 0, error: null };
       try {
         await ensureSpCols();
-        await dbq('create table if not exists preds (id text primary key, home text, away text, league text, pred text, score_pred text, pr jsonb, pm jsonb, pk jsonb, odds_open jsonb, odds_last jsonb, estado text default \'pend\', rs text, clv double precision, created_at timestamptz default now(), updated_at timestamptz default now())', [], 8000);
+        await ensureNrCol();
+        await dbq('create table if not exists preds (id text primary key, home text, away text, league text, pred text, score_pred text, pr jsonb, pm jsonb, pk jsonb, odds_open jsonb, odds_last jsonb, estado text default \'pend\', rs text, clv double precision, norating boolean default false, created_at timestamptz default now(), updated_at timestamptz default now())', [], 8000);
         const ids = out.map(function (p) { return String(p.id); });
         const existing = {};
         if (ids.length) {
-          const rows = await dbq('select id, estado, sp from preds where id = any($1)', [ids], 8000);
+          const rows = await dbq('select id, estado, sp, pred from preds where id = any($1)', [ids], 8000);
           rows.forEach(function (r) { existing[r.id] = r; });
         }
         const triArr = function (o) { return o ? [o.home, o.draw, o.away] : null; };
@@ -567,26 +598,32 @@ export default async function handler(req, res) {
               .map(function (r) { return { k: r.k, line: r.line, dir: String(r.pick || '').indexOf('Más') === 0 ? 'o' : 'u', p: r.p }; }) : [];
             if (!ex) toSave.push({ p: p, picks: picks });
             else if (!ex.sp && picks.length) spOnly.push({ id: String(p.id), picks: picks });
-          } else if (finished && ex && ex.estado === 'pend') {
+          } else if (finished && ex && ex.estado === 'pend' && ex.pred != null) {
+            // El resultado se juzga contra el pick GUARDADO (ex.pred), no contra
+            // el pick del run actual (p.main): el run actual recalcula las
+            // probabilidades con el pool ya actualizado con el resultado
+            // (fuga de información) y el pick se movía hacia el ganador real:
+            // 134 falsos win vs 21 falsos loss en el lote 2026-11-15 (n=1288);
+            // el dashboard sobreestimaba el acierto ~9pp (58% en vez de 50%).
             const real = p.score.home > p.score.away ? 'home' : (p.score.home < p.score.away ? 'away' : 'draw');
-            resUp.push({ id: String(p.id), rs: p.score.home + '-' + p.score.away, estado: (p.main === real) ? 'win' : 'loss' });
+            resUp.push({ id: String(p.id), rs: p.score.home + '-' + p.score.away, estado: (ex.pred === real) ? 'win' : 'loss' });
           } else summary.skipped++;
         });
         for (let i = 0; i < toSave.length; i += 40) {
           const ch = toSave.slice(i, i + 40);
           const params = []; const vals = [];
           ch.forEach(function (it, j) {
-            const p = it.p, b = j * 15;
-            vals.push('($' + (b + 1) + ',$' + (b + 2) + ',$' + (b + 3) + ',$' + (b + 4) + ',$' + (b + 5) + ',$' + (b + 6) + ',$' + (b + 7) + '::jsonb,$' + (b + 8) + '::jsonb,$' + (b + 9) + '::jsonb,$' + (b + 10) + '::jsonb,$' + (b + 11) + '::jsonb,$' + (b + 12) + ',$' + (b + 13) + ',$' + (b + 14) + '::float8,$' + (b + 15) + '::jsonb)');
+            const p = it.p, b = j * 16;
+            vals.push('($' + (b + 1) + ',$' + (b + 2) + ',$' + (b + 3) + ',$' + (b + 4) + ',$' + (b + 5) + ',$' + (b + 6) + ',$' + (b + 7) + '::jsonb,$' + (b + 8) + '::jsonb,$' + (b + 9) + '::jsonb,$' + (b + 10) + '::jsonb,$' + (b + 11) + '::jsonb,$' + (b + 12) + ',$' + (b + 13) + ',$' + (b + 14) + '::float8,$' + (b + 15) + '::jsonb,$' + (b + 16) + '::boolean)');
             params.push(String(p.id), p.home || null, p.away || null, p.league || null, p.main || null,
               (p.top && p.top[0]) ? p.top[0].s : null, js(triArr(p.probs)), js(triArr(p.modelProbs)), js(triArr(p.marketProbs)),
               js(p.odds), js(p.odds), 'pend', null, (p.sampleN == null ? null : p.sampleN),
-              it.picks.length ? JSON.stringify(it.picks) : null);
+              it.picks.length ? JSON.stringify(it.picks) : null, !!p.noRatings);
           });
-          const sql = 'insert into preds (id,home,away,league,pred,score_pred,pr,pm,pk,odds_open,odds_last,estado,rs,sn,sp) values ' + vals.join(',') +
-            ' on conflict (id) do update set odds_last=coalesce(excluded.odds_last,preds.odds_last), sp=coalesce(preds.sp,excluded.sp), updated_at=now()';
+          const sql = 'insert into preds (id,home,away,league,pred,score_pred,pr,pm,pk,odds_open,odds_last,estado,rs,sn,sp,norating) values ' + vals.join(',') +
+            ' on conflict (id) do update set odds_last=coalesce(excluded.odds_last,preds.odds_last), sp=coalesce(preds.sp,excluded.sp), norating=coalesce(excluded.norating,preds.norating), updated_at=now()';
           await dbq(sql, params, 10000);
-          summary.saved1x2 += ch.length;
+          summary.saved1x2 += ch.filter(function (it) { return it.p.main != null; }).length;
           summary.savedSp += ch.filter(function (it) { return it.picks.length; }).length;
         }
         await Promise.all(spOnly.map(function (r) {

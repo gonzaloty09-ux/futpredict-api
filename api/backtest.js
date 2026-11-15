@@ -6,11 +6,16 @@
 // ratings + descanso (restFactor) + blend con Elo (eloLambda) + sin damping de copas
 // (eliminado 2026-11-15) + prior de shrinkage 1 en copas +
 // rho calibrado por liga desde la tasa de empates del prefijo + sampleN mejorado.
+// Paso 2 (2026-11-15): los partidos sin ratings (algún equipo con <3 partidos en
+// el prefijo) se excluyen del Brier/log-loss principal y se reportan aparte en
+// sinRatings, como en el dashboard. Antes se saltaban solo si el equipo no
+// existía en el prefijo; ahora se miden con el mismo criterio que producción
+// (DEF con n=0/nc=0 para el ausente).
 // Diferencias restantes vs producción (documentadas): sin perfFactor (requiere STATS de
 // ESPN no disponibles aquí), sin mezcla con mercado (requiere cuotas), sin leagueWeights.
 // Brier en escala "suma por partido" (baseline azar = 0.667), igual que el dashboard.
 export const maxDuration = 20;
-import { dbq, buildRatings, buildProbs, cl, cors, noCache, requireAuth } from './core.js';
+import { dbq, buildRatings, buildProbs, cl, cors, noCache, requireAuth, noRatings } from './core.js';
 import { computeElo, eloLambda } from './pro.js';
 
 function restFactor(r) { if (r == null) return 1; if (r <= 3) return 0.94; if (r >= 8) return 1.03; return 1; }
@@ -63,6 +68,7 @@ export default async function handler(req, res) {
     const ms = raw.slice(-150);
     const cup = isCupCid(cid);
     let n = 0, acc = 0, brier = 0, logloss = 0, brierB = 0;
+    let nrN = 0, nrAcc = 0, nrBrier = 0, nrLogloss = 0;
     const calib = [];
     ms.forEach(function (m, i) {
       if (i < 10) return;
@@ -71,8 +77,11 @@ export default async function handler(req, res) {
       const t = new Date(m.utcDate).getTime();
       const prefix = ms.slice(0, i).filter(function (x) { return new Date(x.utcDate).getTime() < t; });
       const rr = buildRatings(prefix, t);
-      const H = rr.R[hn], A = rr.R[an];
-      if (!H || !A) return;
+      // Paso 2: como en producción, el equipo ausente del prefijo cae al pool
+      // por defecto (n=0, nc=0) en vez de saltarse el partido: así el partido
+      // se mide en el bucket sinRatings y no contamina el Brier principal.
+      const DEF = { attH: 1, defH: 1, attA: 1, defA: 1, n: 0, nc: 0 };
+      const H = rr.R[hn] || DEF, A = rr.R[an] || DEF;
       // Pipeline cercano a producción (ver comentario superior del archivo).
       const hL0 = cl(rr.lH * H.attH * A.defA * restFactor(restDays(prefix, hn, t)), 0.25, 3.6);
       const aL0 = cl(rr.lA * A.attA * H.defH * restFactor(restDays(prefix, an, t)), 0.2, 3.2);
@@ -85,6 +94,15 @@ export default async function handler(req, res) {
       const hs = m.score.fullTime.home, as = m.score.fullTime.away;
       const y = [hs > as ? 1 : 0, hs === as ? 1 : 0, hs < as ? 1 : 0];
       const pr = [bp.probs.home / 100, bp.probs.draw / 100, bp.probs.away / 100];
+      if (noRatings(H, A)) {
+        const pickNr = pr[0] >= pr[1] && pr[0] >= pr[2] ? 0 : (pr[2] >= pr[1] ? 2 : 1);
+        nrN++; if (y[pickNr] === 1) nrAcc++;
+        for (let k = 0; k < 3; k++) {
+          nrBrier += (pr[k] - y[k]) * (pr[k] - y[k]);
+          nrLogloss -= y[k] * Math.log(Math.max(0.01, pr[k]));
+        }
+        return;
+      }
       n++;
       const pick = pr[0] >= pr[1] && pr[0] >= pr[2] ? 0 : (pr[2] >= pr[1] ? 2 : 1);
       if (y[pick] === 1) acc++;
@@ -102,8 +120,9 @@ export default async function handler(req, res) {
     const out = {
       ok: true, cid: cid, n: n, acc: Math.round(acc / n * 100),
       brier: +(brier / n).toFixed(3), logloss: +(logloss / n).toFixed(3), brierBaseline: +(brierB / n).toFixed(3),
+      sinRatings: { n: nrN, acc: nrN ? Math.round(nrAcc / nrN * 100) : null, brier: nrN ? +(nrBrier / nrN).toFixed(3) : null, logloss: nrN ? +(nrLogloss / nrN).toFixed(3) : null },
       calib: Object.keys(calib).map(function (k) { return { dice: k + '%', n: calib[k].n, acerto: Math.round(calib[k].ok / calib[k].n * 100) }; }),
-      nota: 'Pipeline cercano a producción (ratings+descanso+Elo+rho por liga+prior de shrinkage 1 en copas). Sin perfFactor(xG) ni mezcla con mercado: el Brier real con mercado puede diferir.'
+      nota: 'Pipeline cercano a producción (ratings+descanso+Elo+rho por liga+prior de shrinkage 1 en copas). Sin perfFactor(xG) ni mezcla con mercado: el Brier real con mercado puede diferir. Los partidos sin ratings (n=' + nrN + ') se excluyen del Brier principal y se reportan en sinRatings.'
     };
     return res.status(200).json(out);
   } catch (e) {
