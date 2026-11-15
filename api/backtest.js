@@ -3,7 +3,8 @@
 // Uso: /api/backtest?cid=espn:bra.1  o  cid=PD1 (código football-data). Sin cache de probas: es medición honesta.
 //
 // A4: el pipeline replica la producción tanto como es posible sin datos externos:
-// ratings + descanso (restFactor) + blend con Elo (eloLambda) + damping de copas ×0.95 +
+// ratings + descanso (restFactor) + blend con Elo (eloLambda) + sin damping de copas
+// (eliminado 2026-11-15) + prior de shrinkage 1 en copas +
 // rho calibrado por liga desde la tasa de empates del prefijo + sampleN mejorado.
 // Diferencias restantes vs producción (documentadas): sin perfFactor (requiere STATS de
 // ESPN no disponibles aquí), sin mezcla con mercado (requiere cuotas), sin leagueWeights.
@@ -79,8 +80,8 @@ export default async function handler(req, res) {
       const EL = computeElo(prefix);
       const adj = eloLambda(hL0, aL0, EL[hn] || 1500, EL[an] || 1500, sampleN);
       let hL = adj[0], aL = adj[1];
-      if (cup) { hL *= 0.95; aL *= 0.95; } // damping de copas como en producción
-      const bp = buildProbs(hL, aL, sampleN, rhoOfPrefix(prefix));
+      // Sin damping de copas (eliminado en producción 2026-11-15): el backtest mide el mismo pipeline.
+      const bp = buildProbs(hL, aL, sampleN, rhoOfPrefix(prefix), cup ? 1 : 2);
       const hs = m.score.fullTime.home, as = m.score.fullTime.away;
       const y = [hs > as ? 1 : 0, hs === as ? 1 : 0, hs < as ? 1 : 0];
       const pr = [bp.probs.home / 100, bp.probs.draw / 100, bp.probs.away / 100];
@@ -102,7 +103,7 @@ export default async function handler(req, res) {
       ok: true, cid: cid, n: n, acc: Math.round(acc / n * 100),
       brier: +(brier / n).toFixed(3), logloss: +(logloss / n).toFixed(3), brierBaseline: +(brierB / n).toFixed(3),
       calib: Object.keys(calib).map(function (k) { return { dice: k + '%', n: calib[k].n, acerto: Math.round(calib[k].ok / calib[k].n * 100) }; }),
-      nota: 'Pipeline cercano a producción (ratings+descanso+Elo+rho por liga+damping copas). Sin perfFactor(xG) ni mezcla con mercado: el Brier real con mercado puede diferir.'
+      nota: 'Pipeline cercano a producción (ratings+descanso+Elo+rho por liga+prior de shrinkage 1 en copas). Sin perfFactor(xG) ni mezcla con mercado: el Brier real con mercado puede diferir.'
     };
     return res.status(200).json(out);
   } catch (e) {

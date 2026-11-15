@@ -113,6 +113,16 @@ export function mapLeague(name) {
   if (n.indexOf('championship') !== -1) return 'soccer_efl_champ';
   if (n.indexOf('champions') !== -1) return 'soccer_uefa_champs_league';
   if (n.indexOf('europa league') !== -1) return 'soccer_uefa_europa_league';
+  // Copas (2026-11-15): antes devolvían null y el 92% de los picks de copa no tenía
+  // mercado. Claves verificadas en the-odds-api.com/sports-odds-data/sports-apis.html.
+  if (n.indexOf('conference league') !== -1) return 'soccer_uefa_europa_conference_league';
+  if (n.indexOf('nations league') !== -1) return 'soccer_uefa_nations_league';
+  if (n.indexOf('fa cup') !== -1) return 'soccer_fa_cup';
+  if (n.indexOf('efl cup') !== -1 || n.indexOf('league cup') !== -1) return 'soccer_england_efl_cup';
+  if (n.indexOf('copa del rey') !== -1) return 'soccer_spain_copa_del_rey';
+  if (n.indexOf('dfb') !== -1) return 'soccer_germany_dfb_pokal';
+  if (n.indexOf('coupe de france') !== -1) return 'soccer_france_coupe_de_france';
+  if (n.indexOf('coppa italia') !== -1) return 'soccer_italy_coppa_italia';
   if (n.indexOf('eredivisie') !== -1) return 'soccer_netherlands_eredivisie';
   if (n.indexOf('primeira liga') !== -1) return 'soccer_portugal_primeira_liga';
   if (n.indexOf('libertadores') !== -1) return 'soccer_conmebol_libertadores';
@@ -191,7 +201,7 @@ export function mkHist(ms, ts, now) {
   const rr = buildRatings(ms, now);
   return { R: rr.R, lH: rr.lH, lA: rr.lA, form: buildForm(ms), _matches: ms, ts: ts, ok: true, count: ms.length };
 }
-export function buildProbs(hL, aL, sampleN, rho) {
+export function buildProbs(hL, aL, sampleN, rho, prior) {
   const R = rho != null ? rho : RHO;
   const maxG = 8; let tot = 0, hW = 0, d = 0, aW = 0; const sc = [];
   for (let h = 0; h <= maxG; h++) for (let a = 0; a <= maxG; a++) {
@@ -204,7 +214,9 @@ export function buildProbs(hL, aL, sampleN, rho) {
   // Shrinkage hacia uniforme (33.3%): con poca muestra las probs crudas son ruidosas.
   // Calibración medida (n=298, 2026-10-12): el modelo decía 38% y acertaba 41% (+3pp
   // conservador). El prior de +4 era demasiado fuerte; +2 lo suaviza sin eliminarlo.
-  const s = sampleN / (sampleN + 2); const b = 100 / 3;
+  // prior: fuerza del shrinkage hacia 33%. En copas (prior=1) el shrinkage es más suave:
+  // los datos muestran que el modelo aplasta demasiado a los favoritos de copa.
+  const s = sampleN / (sampleN + (prior == null ? 2 : prior)); const b = 100 / 3;
   let ph = Math.round(b + (hW / tot * 100 - b) * s);
   let pd = Math.round(b + (d / tot * 100 - b) * s);
   let pa = Math.round(b + (aW / tot * 100 - b) * s);

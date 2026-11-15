@@ -79,7 +79,9 @@ export async function leagueWeights(dbq, now) {
         const bM = o.bM / o.n, bK = o.bK / o.n;
         // W es el peso DEL MERCADO en la mezcla final: si el mercado es mejor (bK < bM),
         // su peso SUBE. (El signo estaba invertido: antes bajaba.)
-        w[k] = Math.round(Math.min(0.65, Math.max(0.15, 0.4 + 2 * (bM - bK))) * 100) / 100;
+        // Calibración 2026-11-15 (n=1207): base 0.55, pendiente 3, tope 0.80 — el mercado
+        // gana en Brier en casi todas las ligas y el tope de 0.65 limitaba la adaptación.
+        w[k] = Math.round(Math.min(0.80, Math.max(0.15, 0.55 + 3 * (bM - bK))) * 100) / 100;
       }
     });
     LGW = w; LGW_TS = now;

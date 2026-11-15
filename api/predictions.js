@@ -15,7 +15,7 @@ let ODDS_LEFT_TS = 0;
 let KV_READY = false;
 let KV_LOADED = 0;
 let KV_ERR = null;
-const MARKET_W = 0.4;
+const MARKET_W = 0.55;
 const HIST_MAX = 200;
 // Calibración de stats: actuals por partido pendientes de guardar (se vacían en statsSeed).
 let PEND_ACT = [];
@@ -418,13 +418,16 @@ export default async function handler(req, res) {
       const sampleN = Math.max((home.n + away.n) / 2, (Math.min(home.nc || 0, 25) + Math.min(away.nc || 0, 25)) / 2);
       const adj = eloLambda(hL0, aL0, rGet(EL, IEL, hn) || 1500, rGet(EL, IEL, an) || 1500, sampleN);
       let hL = adj[0], aL = adj[1];
-      // Instancias de copa (eliminacion directa): el juego tiende a ser mas cauteloso -> lambda algo menor.
-      if (['uefa.champions', 'uefa.europa', 'uefa.conference', 'conmebol.libertadores', 'conmebol.sudamericana', 'copa.del.rey', 'fa.cup', 'efl.cup', 'dfb.pokal', 'coppa.italia', 'coupe.de.france', 'uefa.nations'].indexOf(String(m.competition.id).replace('espn:', '')) !== -1) { hL *= 0.95; aL *= 0.95; }
+      // Copas (2026-11-15): se ELIMINA el damping x0.95. Decía que el juego de copa es más
+      // cauteloso y bajaba las lambdas, pero los datos (n=358, dice 37% acierta 67%) muestran
+      // que el modelo SUBESTIMA a los favoritos de copa: el damping empujaba en la dirección
+      // contraria. Se conserva isCup para el prior de shrinkage en buildProbs.
+      const isCup = ['uefa.champions', 'uefa.europa', 'uefa.conference', 'conmebol.libertadores', 'conmebol.sudamericana', 'copa.del.rey', 'fa.cup', 'efl.cup', 'dfb.pokal', 'coppa.italia', 'coupe.de.france', 'uefa.nations'].indexOf(String(m.competition.id).replace('espn:', '')) !== -1;
       // Regresion por finalizacion (xG estimado propio): anotar muy por encima de las chances
       // generadas es insostenible; ajuste suave ±12% por equipo.
       hL = cl(hL * perfFactor(STATS, hn), 0.25, 3.6);
       aL = cl(aL * perfFactor(STATS, an), 0.2, 3.2);
-      const bp = buildProbs(hL, aL, sampleN, rhoOf(m.competition.id));
+      const bp = buildProbs(hL, aL, sampleN, rhoOf(m.competition.id), isCup ? 1 : 2);
       const formOf = function (team) { return (H && H.form && H.form[team]) ? H.form[team] : []; };
       const cid = m.competition.id;
       const AG = AGGS[cid] || {};
@@ -439,6 +442,7 @@ export default async function handler(req, res) {
         aggH: AG[hn] || null, aggA: AG[an] || null,
         lcode: String(cid).indexOf('espn:') === 0 ? cid.slice(5) : null,
         rho: +rhoOf(cid).toFixed(3),
+        cup: isCup,
         sp: statPreds(STATS, hn, an, isE(m)),
         h2h: h2hOf(H2HMAP, hn, an),
         odds: null, value: [], stats: null
@@ -488,7 +492,7 @@ export default async function handler(req, res) {
           const f = lt / (p.hL + p.aL);
           if (f > 0.6 && f < 1.6) { p.hL = +(p.hL * f).toFixed(2); p.aL = +(p.aL * f).toFixed(2); }
         }
-        const bp2 = buildProbs(p.hL, p.aL, p.sampleN, p.rho);
+        const bp2 = buildProbs(p.hL, p.aL, p.sampleN, p.rho, p.cup ? 1 : 2);
         p.modelProbs = bp2.probs;
         p.top = bp2.top.map(function (x) { return { s: x.h + '-' + x.a, p: Math.round(x.p * 100) }; });
         const ih = 1 / o.h, id = 1 / o.d, ia = 1 / o.a; const t = ih + id + ia;
